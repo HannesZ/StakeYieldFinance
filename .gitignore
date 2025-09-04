@@ -1,0 +1,7 @@
+archive/
+temp/
+Theory/
+modified_file.csv
+.env
+beacon_chain_queues.*
+*.ods
