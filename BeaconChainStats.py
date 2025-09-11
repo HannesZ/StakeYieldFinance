@@ -8,8 +8,17 @@ from web3 import Web3
 import json
 import pathlib
 
-EXECUTION_RPC_URL = os.getenv("EXECUTION_RPC_URL")
+# Choose which execution node to use for EL backlog queries.
+use_external_node=True
+if use_external_node:
+    print("Using external node for EL backlog queries as per USE_EXTERNAL_NODE_FOR_EL_BACKLOG")
+    EXECUTION_RPC_URL = os.getenv("EXTERNAL_EXECUTION_RPC_URL")
+else:
+    EXECUTION_RPC_URL = os.getenv("EXECUTION_RPC_URL")
+    
+
 DEPOSIT_CONTRACT_ADDRESS = os.getenv("DEPOSIT_CONTRACT_ADDRESS")
+DEPOSIT_CONTRACT_CREATION_BLOCK = os.getenv("DEPOSIT_CONTRACT_CREATION_BLOCK")
 
 # Minimal ABI to decode DepositEvent
 DEPOSIT_EVENT_ABI = json.loads("""
@@ -57,18 +66,58 @@ def get_deposit_contract_address_from_beacon():
 
 def get_beacon_processed_deposit_count(state_id="head"):
     """
-    Returns eth1_data.deposit_count from the beacon state -> number of deposit *events* processed.
+    Return eth1_data.deposit_count at the given block/state,
+    using block routes that Teku supports.
+
+    Strategy:
+      1) Resolve a canonical block root for {state_id} via /eth/v1/beacon/headers/{state_id}
+      2) Fetch that block via /eth/v2/beacon/blocks/{root}
+      3) Read message.body.eth1_data.deposit_count
     """
-    url = f"{BEACON_NODE_URL}/eth/v1/beacon/states/{state_id}/eth1_data"
-    r = _get_with_retries(url)
-    if not r:
+    # 1) Resolve a canonical block root (works for "head", a slot, block root, etc.)
+    hdr_url = f"{BEACON_NODE_URL}/eth/v1/beacon/headers/{state_id}"
+    hdr = _get_with_retries(hdr_url)
+    if not hdr or hdr.status_code != 200:
+        print(f"Could not resolve header for state_id={state_id} (status {getattr(hdr,'status_code',None)})")
         return None
+
     try:
-        data = r.json()["data"]
-        # Often exposed as a decimal string
-        return int(data["deposit_count"])
+        hdr_data = hdr.json()["data"]
+        # Teku returns: {"root": "...", "canonical": true, "header": {...}}
+        block_id = hdr_data.get("root")
+        if not block_id:
+            print("Header response missing 'root'")
+            return None
     except Exception:
-        print("Could not parse eth1_data.deposit_count")
+        print("Invalid JSON from headers endpoint")
+        return None
+
+    # 2) Fetch the block by root (v2 preferred)
+    blk_url = f"{BEACON_NODE_URL}/eth/v2/beacon/blocks/{block_id}"
+    blk = _get_with_retries(blk_url)
+    if not blk or blk.status_code != 200:
+        # Fallback to v1 if v2 isn’t available
+        blk_url = f"{BEACON_NODE_URL}/eth/v1/beacon/blocks/{block_id}"
+        blk = _get_with_retries(blk_url)
+        if not blk or blk.status_code != 200:
+            print(f"Could not fetch block for root {block_id} (status {getattr(blk,'status_code',None)})")
+            return None
+
+    # 3) Parse deposit_count from the block body
+    try:
+        j = blk.json()
+        # v2 shape: {"data":{"message":{"body":{"eth1_data":{"deposit_count":"123"}}}}}
+        data = j.get("data") or j
+        message = data.get("message") or data.get("signed_block", {}).get("message") or {}
+        body = message.get("body", {})
+        eth1_data = body.get("eth1_data", {})
+        deposit_count = eth1_data.get("deposit_count")
+        if deposit_count is None:
+            print("Block JSON missing eth1_data.deposit_count")
+            return None
+        return int(deposit_count)
+    except Exception as e:
+        print(f"Failed to parse deposit_count: {e}")
         return None
     
 def _decode_amount_bytes_to_gwei(b: bytes) -> int:
@@ -429,7 +478,7 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
         for slot in range(resume_slot, end_slot + 1, interval):
             # Refresh fully at epoch boundaries (or first iteration)
             if slot % 32 == 0 or not initialized_epoch_block:
-                print(f"\n********************************************** Epoch {slot//32} **********************************************")
+                print(f"\n**************************************************************************** Epoch {slot//32} ****************************************************************************")
 
                 entry_queue = get_validators_by_status(state_id=slot, status="pending_queued")
                 exit_queue  = get_validators_by_status(state_id=slot, status="active_exiting,active_slashed")
@@ -442,6 +491,28 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
                 entry_eth = sum_effective_eth(entry_queue)
                 exit_eth  = sum_effective_eth(exit_queue)
                 active_eth = sum_effective_eth(active_ongoing)
+
+                # ---- NEW: precise EL backlog after beacon's processed deposits ----
+                el_backlog_events = 0
+                el_backlog_eth = 0.0
+                if EXECUTION_RPC_URL and deposit_contract:
+                    beacon_processed = get_beacon_processed_deposit_count(state_id=slot)
+                    if beacon_processed is not None:
+                        try:
+                            pending_events, pending_gwei = get_el_backlog_precise(
+                                EXECUTION_RPC_URL,
+                                deposit_contract,
+                                processed_count=beacon_processed,
+                                cache_path="deposit_index.cache.json",
+                                # Optional: if you know the deposit contract creation block on your network, pass it here
+                                from_block_hint=DEPOSIT_CONTRACT_CREATION_BLOCK
+                            )
+                            el_backlog_events = pending_events
+                            el_backlog_eth = pending_gwei / 1e9
+                        except Exception as e:
+                            print(f"Warning: precise EL backlog failed at slot {slot}: {e}")
+                estimated_additional_entries = int((el_backlog_eth * 1e9) // 32_000_000_000)  # floor(pending_gwei / 32e9)
+                entry_total_estimated = entry_count + estimated_additional_entries
 
                 initialized_epoch_block = True
             else:
@@ -464,27 +535,7 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
                 # entry_queue = get_validators_by_status(state_id=slot, status="pending_queued")
                 # entry_count, entry_eth = len(entry_queue), sum_effective_eth(entry_queue)
 
-                # ---- NEW: precise EL backlog after beacon's processed deposits ----
-                el_backlog_events = 0
-                el_backlog_eth = 0.0
-                if EXECUTION_RPC_URL and deposit_contract:
-                    beacon_processed = get_beacon_processed_deposit_count(state_id=slot)
-                    if beacon_processed is not None:
-                        try:
-                            pending_events, pending_gwei = get_el_backlog_precise(
-                                EXECUTION_RPC_URL,
-                                deposit_contract,
-                                processed_count=beacon_processed,
-                                cache_path="deposit_index.cache.json",
-                                # Optional: if you know the deposit contract creation block on your network, pass it here
-                                from_block_hint=None
-                            )
-                            el_backlog_events = pending_events
-                            el_backlog_eth = pending_gwei / 1e9
-                        except Exception as e:
-                            print(f"Warning: precise EL backlog failed at slot {slot}: {e}")
-            estimated_additional_entries = int((el_backlog_eth * 1e9) // 32_000_000_000)  # floor(pending_gwei / 32e9)
-            entry_total_estimated = entry_count + estimated_additional_entries
+
 
             writer.writerow([
                 slot // 32,
@@ -518,6 +569,6 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
 # ------------------ Run directly ------------------
 if __name__ == "__main__":
     # Example range
-    end_slot = 12464282
-    start_slot = 12464182
+    end_slot = 12566081
+    start_slot = end_slot -20 #12464182
     query_epochs(start_slot, end_slot, interval=1)
