@@ -569,6 +569,6 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
 # ------------------ Run directly ------------------
 if __name__ == "__main__":
     # Example range
-    end_slot = 12566081
-    start_slot = end_slot -20 #12464182
+    end_slot = 12659090
+    start_slot = end_slot -20
     query_epochs(start_slot, end_slot, interval=1)

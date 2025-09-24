@@ -1,7 +1,39 @@
+# Ignore folder for temporary files
 archive/
 temp/
+
+# Ignore specific files and folders
 Materials/
 modified_file.csv
 .env
+
+# Ignore output files
 beacon_chain_queues.*
 *.ods
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# Test/coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# IDE/project settings
+.vscode/
+.idea/
