@@ -2,6 +2,10 @@
 archive/
 temp/
 
+
+# Ignore scratch files
+scratch.*
+
 # Ignore specific files and folders
 Materials/
 modified_file.csv
