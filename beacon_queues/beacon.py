@@ -1,5 +1,5 @@
 from config import BEACON_NODE_URL, DEPOSIT_CONTRACT_ADDRESS
-from http import get_with_retries
+from http_helper import get_with_retries
 
 def get_deposit_contract_address_from_beacon():
     """
@@ -125,6 +125,7 @@ def get_beacon_processed_deposit_count(state_id="head"):
         return None
 
     # Fetch the full beacon block data using the block root
+    # TODO: try to understand both v2 and v1 endpoints
     blk = (
         get_with_retries(f"{BEACON_NODE_URL}/eth/v2/beacon/blocks/{block_id}")
         or get_with_retries(f"{BEACON_NODE_URL}/eth/v1/beacon/blocks/{block_id}")

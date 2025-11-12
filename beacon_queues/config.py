@@ -14,7 +14,7 @@ def get_env_for_chain(base_key: str, chain_id: str):
 CHAIN_ID = os.getenv("CHAIN_ID", "1").strip()
 
 # Use external EL node for backlog?
-USE_EXTERNAL_NODE = os.getenv("USE_EXTERNAL_NODE_FOR_EL_BACKLOG", "true").lower() == "true"
+USE_EXTERNAL_NODE = os.getenv("USE_EXTERNAL_NODE_FOR_EL_BACKLOG", "true").lower() == "false"
 
 # EL RPC
 if USE_EXTERNAL_NODE:
@@ -28,6 +28,9 @@ if not EXECUTION_RPC_URL:
         f"or a chain-specific variant with _{CHAIN_ID}."
     )
 
+# Fallback EL RPC (used when primary returns null)
+EXECUTION_RPC_URL_FALLBACK = get_env_for_chain("EXTERNAL_EXECUTION_RPC_URL", CHAIN_ID) if not USE_EXTERNAL_NODE else None
+
 # CL (beacon) RPC
 BEACON_NODE_URL = get_env_for_chain("BEACON_NODE_URL", CHAIN_ID)
 if not BEACON_NODE_URL:
@@ -35,6 +38,8 @@ if not BEACON_NODE_URL:
 
 # Deposit contract info
 DEPOSIT_CONTRACT_ADDRESS = get_env_for_chain("DEPOSIT_CONTRACT_ADDRESS", CHAIN_ID)
+DEPOSIT_EVENT_TOPIC0 = get_env_for_chain("DEPOSIT_EVENT_TOPIC0", CHAIN_ID)
+
 if not DEPOSIT_CONTRACT_ADDRESS:
     raise RuntimeError(f"DEPOSIT_CONTRACT_ADDRESS (or ..._{CHAIN_ID}) is required.")
 
@@ -42,3 +47,7 @@ _deposit_block_env = get_env_for_chain("DEPOSIT_CONTRACT_CREATION_BLOCK", CHAIN_
 if not _deposit_block_env:
     raise RuntimeError(f"DEPOSIT_CONTRACT_CREATION_BLOCK (or ..._{CHAIN_ID}) is required.")
 DEPOSIT_CONTRACT_CREATION_BLOCK = int(_deposit_block_env)
+
+
+# Etherscan API key (for EL backlog estimation)
+ETHERSCAN_API_KEY = get_env_for_chain("ETHERSCAN_API_KEY", CHAIN_ID)
