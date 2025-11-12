@@ -1,2 +1,0 @@
-epoch,slot,active_count,active_eth,entry_queue_count,entry_queue_eth,exit_queue_count,exit_queue_eth,el_backlog_events,el_backlog_eth,entry_total_estimated
-404498,12943937,950733,33348727.000000000,2,2000.000000000,46472,2362317.000000000,0,0.000000000,2
