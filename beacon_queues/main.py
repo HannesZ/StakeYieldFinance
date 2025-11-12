@@ -1,11 +1,12 @@
 import csv, time
-from .config import EXECUTION_RPC_URL, DEPOSIT_CONTRACT_CREATION_BLOCK
-from .beacon import (
+from config import EXECUTION_RPC_URL, DEPOSIT_CONTRACT_CREATION_BLOCK, EXECUTION_RPC_URL_FALLBACK
+from beacon import (
     get_validators_by_status, sum_effective_eth,
     get_beacon_processed_deposit_count, get_deposit_contract_address_from_beacon
 )
-from .el_backlog import get_el_backlog_precise
-from .csv_io import CSV_HEADER, csv_has_header, last_written_slot
+from event_backlog import get_el_backlog_estimate_events
+
+from csv_io import CSV_HEADER, csv_has_header, last_written_slot
 
 deposit_contract = get_deposit_contract_address_from_beacon()
 
@@ -53,17 +54,22 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
                     beacon_processed = get_beacon_processed_deposit_count(state_id=slot)
                     if beacon_processed is not None:
                         try:
-                            pending_events, pending_gwei = get_el_backlog_precise(
-                                EXECUTION_RPC_URL,
-                                deposit_contract,
+                            pending_events, pending_gwei = get_el_backlog_estimate_events(
+                                rpc_url=EXECUTION_RPC_URL,
+                                deposit_contract=deposit_contract,
                                 processed_count=beacon_processed,
-                                cache_path="deposit_index.cache.json",
-                                from_block_hint=DEPOSIT_CONTRACT_CREATION_BLOCK or None
+                                start_block_hint=DEPOSIT_CONTRACT_CREATION_BLOCK,
+                                end_block=-1,             # latest
+                                block_stride=10_000,     # shrink if you hit provider limits
+                                incomplete_weight_after_cutoff=0.5,
+                                cache_path="cache/deposit_events.cache.jsonl",
+                                fallback_url=EXECUTION_RPC_URL_FALLBACK,  # Optional secondary RPC (for providers with low rate limits
+                                meta_cache_path="cache/deposit_metadata.cache.json",  # Cache for block timestamps and tx from addresses
                             )
                             el_backlog_events = pending_events
-                            el_backlog_eth = pending_gwei / 1e9
+                            el_backlog_eth = pending_gwei / 1e9  # gwei -> ETH
                         except Exception as e:
-                            print(f"Warning: precise EL backlog failed at slot {slot}: {e}")
+                            print(f"Warning: event-level EL backlog failed at slot {slot}: {e}")
 
                 estimated_additional_entries = int((el_backlog_eth * 1e9) // 32_000_000_000)
                 entry_total_estimated = entry_count + estimated_additional_entries
@@ -101,6 +107,6 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
     return filename
 
 if __name__ == "__main__":
-    end_slot = 12_659_090
-    start_slot = end_slot - 20
+    end_slot = 13002315
+    start_slot = end_slot - 40
     query_epochs(start_slot, end_slot, interval=1)
