@@ -43,3 +43,4 @@ htmlcov/
 # IDE/project settings
 .vscode/
 .idea/
+cache/deposit_metadata.cache.json
