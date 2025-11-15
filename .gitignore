@@ -1,7 +1,9 @@
 # Ignore folder for temporary files
 archive/
 temp/
-cache/
+
+cache/*
+!cache/.gitkeep
 
 # Ignore scratch files
 scratch.*
