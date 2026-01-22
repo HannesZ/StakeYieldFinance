@@ -104,6 +104,84 @@ def enrich_csv_with_pending_deposits(in_csv: str, out_csv: str):
 
 
 # -----------------------------
+# Exit queue binary search optimization
+# -----------------------------
+
+def get_exit_queue_data(slot):
+    """Query exit queue for a single slot, returns (count, eth)."""
+    exit_queue = get_validators_by_status(state_id=slot, status="active_exiting,active_slashed")
+    return len(exit_queue), sum_effective_eth(exit_queue)
+
+
+def find_exit_queue_changes_recursive(slots, cache):
+    """
+    Recursively find change points using binary search.
+    Fills cache with queried slots only (change points).
+    """
+    if len(slots) <= 1:
+        if slots and slots[0] not in cache:
+            cache[slots[0]] = get_exit_queue_data(slots[0])
+        return
+
+    first_slot = slots[0]
+    last_slot = slots[-1]
+
+    # Get data for first and last slots (use cache if available)
+    if first_slot not in cache:
+        cache[first_slot] = get_exit_queue_data(first_slot)
+    if last_slot not in cache:
+        cache[last_slot] = get_exit_queue_data(last_slot)
+
+    # If same count, no changes in this range (don't recurse)
+    if cache[first_slot][0] == cache[last_slot][0]:
+        return
+
+    # If adjacent slots with different values, we've found the boundary
+    if len(slots) == 2:
+        return
+
+    # Different and not adjacent - query middle and recurse both halves
+    mid_idx = len(slots) // 2
+    mid_slot = slots[mid_idx]
+
+    if mid_slot not in cache:
+        cache[mid_slot] = get_exit_queue_data(mid_slot)
+
+    # Recurse on left half [first, mid] and right half [mid, last]
+    find_exit_queue_changes_recursive(slots[:mid_idx + 1], cache)
+    find_exit_queue_changes_recursive(slots[mid_idx:], cache)
+
+
+def find_exit_queue_changes(slots):
+    """
+    Use binary search to find exit queue changes within a list of slots.
+    Returns a dict mapping slot -> (exit_count, exit_eth).
+    """
+    if not slots:
+        return {}
+
+    cache = {}
+
+    # Find all change points via binary search
+    find_exit_queue_changes_recursive(slots, cache)
+
+    # Fill in all slots by propagating values forward from queried slots
+    result = {}
+    queried_slots = sorted(cache.keys())
+    current_data = cache[queried_slots[0]]
+
+    q_idx = 0
+    for slot in slots:
+        # Move to next queried slot if we've passed it
+        while q_idx < len(queried_slots) - 1 and queried_slots[q_idx + 1] <= slot:
+            q_idx += 1
+            current_data = cache[queried_slots[q_idx]]
+        result[slot] = current_data
+
+    return result
+
+
+# -----------------------------
 # Main query
 # -----------------------------
 
@@ -126,84 +204,85 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
         if needs_header:
             writer.writerow(CSV_HEADER)
 
-        initialized_epoch_block = False
+        # Process slots epoch by epoch for efficiency
+        slot = resume_slot
 
-        # Carried snapshot values (epoch-granularity)
-        cur_beacon_deposit_count = ""
-        cur_eth1_block_hash = ""
-        cur_eth1_block_number = ""
-        cur_eth1_block_timestamp = ""
+        while slot <= end_slot:
+            epoch = slot // 32
+            epoch_start = epoch * 32
+            epoch_end = epoch_start + 31
 
-        # Counts/eth carried across epoch
-        active_count = active_eth = 0
-        entry_count = entry_eth = 0.0
-        exit_count  = exit_eth  = 0.0
+            # Determine which slots in this epoch we need to process
+            first_slot_in_epoch = max(slot, epoch_start)
+            last_slot_in_epoch = min(end_slot, epoch_end)
+            epoch_slots = list(range(first_slot_in_epoch, last_slot_in_epoch + 1, interval))
 
-        for slot in range(resume_slot, end_slot + 1, interval):
-            epoch_boundary = (slot % 32 == 0) or (not initialized_epoch_block)
+            if not epoch_slots:
+                slot = epoch_end + 1
+                continue
 
-            if epoch_boundary:
-                print(f"\n**************************************************************************** Epoch {slot//32} ****************************************************************************")
+            print(f"\n**************************************************************************** Epoch {epoch} ****************************************************************************")
 
-                entry_queue = get_validators_by_status(state_id=slot, status="pending_queued")
-                exit_queue  = get_validators_by_status(state_id=slot, status="active_exiting,active_slashed")
-                active_ongoing = get_validators_by_status(state_id=slot, status="active_ongoing")
+            # Query entry queue and active validators at epoch boundary (first slot we process)
+            boundary_slot = epoch_slots[0]
+            entry_queue = get_validators_by_status(state_id=boundary_slot, status="pending_queued")
+            active_ongoing = get_validators_by_status(state_id=boundary_slot, status="active_ongoing")
 
-                entry_count = len(entry_queue)
-                exit_count  = len(exit_queue)
-                active_count = len(active_ongoing)
+            entry_count = len(entry_queue)
+            active_count = len(active_ongoing)
+            entry_eth = sum_effective_eth(entry_queue)
+            active_eth = sum_effective_eth(active_ongoing)
 
-                entry_eth = sum_effective_eth(entry_queue)
-                exit_eth  = sum_effective_eth(exit_queue)
-                active_eth = sum_effective_eth(active_ongoing)
+            # Get eth1 snapshot at epoch boundary
+            cur_beacon_deposit_count = ""
+            cur_eth1_block_hash = ""
+            cur_eth1_block_number = ""
+            cur_eth1_block_timestamp = ""
 
-                # --- Snapshot only at epoch boundary ---
-                cur_beacon_deposit_count = ""
-                cur_eth1_block_hash = ""
-                cur_eth1_block_number = ""
-                cur_eth1_block_timestamp = ""
+            snap = get_beacon_eth1_snapshot(state_id=boundary_slot)
+            if snap:
+                cur_beacon_deposit_count, cur_eth1_block_hash = snap
+                if (EXECUTION_RPC_URL and cur_eth1_block_hash and
+                    cur_eth1_block_hash != "0x0000000000000000000000000000000000000000000000000000000000000000"):
+                    try:
+                        cur_eth1_block_number, cur_eth1_block_timestamp = resolve_el_block_hash(
+                            EXECUTION_RPC_URL, cur_eth1_block_hash
+                        )
+                    except Exception as e:
+                        print(f"Warning: EL resolve failed at slot {boundary_slot}: {e}")
 
-                snap = get_beacon_eth1_snapshot(state_id=slot)
-                if snap:
-                    cur_beacon_deposit_count, cur_eth1_block_hash = snap
-                    # Check if block hash is not zero hash before trying to resolve it
-                    if (EXECUTION_RPC_URL and cur_eth1_block_hash and
-                        cur_eth1_block_hash != "0x0000000000000000000000000000000000000000000000000000000000000000"):
-                        try:
-                            cur_eth1_block_number, cur_eth1_block_timestamp = resolve_el_block_hash(
-                                EXECUTION_RPC_URL, cur_eth1_block_hash
-                            )
-                        except Exception as e:
-                            print(f"Warning: EL resolve failed at slot {slot}: {e}")
+            # Use binary search to efficiently find exit queue changes within epoch
+            print(f"  Finding exit queue changes for {len(epoch_slots)} slots...")
+            exit_queue_cache = find_exit_queue_changes(epoch_slots)
+            queries_made = len(set(exit_queue_cache.values()))  # Unique queries
+            print(f"  Exit queue: {queries_made} unique states found")
 
-                initialized_epoch_block = True
-            else:
-                # per-slot updates
-                exit_queue  = get_validators_by_status(state_id=slot, status="active_exiting,active_slashed")
-                exit_count  = len(exit_queue)
-                exit_eth    = sum_effective_eth(exit_queue)
-            # --- one row per slot (snapshot columns repeated within epoch) ---
-            writer.writerow([
-                slot // 32, slot,
-                active_count, f"{active_eth:.9f}",
-                entry_count,  f"{entry_eth:.9f}",
-                exit_count,   f"{exit_eth:.9f}",
-                cur_beacon_deposit_count,
-                cur_eth1_block_hash,
-                cur_eth1_block_number,
-                cur_eth1_block_timestamp,
-            ])
+            # Write rows for all slots in this epoch
+            for s in epoch_slots:
+                exit_count, exit_eth = exit_queue_cache[s]
 
-            print(
-                f"Slot {slot} - Active: {active_count} / {active_eth:.3f} ETH, "
-                f"Entry(beacon): {entry_count} / {entry_eth:.3f} ETH, "
-                f"Exit: {exit_count} / {exit_eth:.3f} ETH, "
-                f"Beacon dep count: {cur_beacon_deposit_count}, "
-                f"Eth1 block: {cur_eth1_block_number}"
-            )
+                writer.writerow([
+                    s // 32, s,
+                    active_count, f"{active_eth:.9f}",
+                    entry_count,  f"{entry_eth:.9f}",
+                    exit_count,   f"{exit_eth:.9f}",
+                    cur_beacon_deposit_count,
+                    cur_eth1_block_hash,
+                    cur_eth1_block_number,
+                    cur_eth1_block_timestamp,
+                ])
+
+                print(
+                    f"Slot {s} - Active: {active_count} / {active_eth:.3f} ETH, "
+                    f"Entry(beacon): {entry_count} / {entry_eth:.3f} ETH, "
+                    f"Exit: {exit_count} / {exit_eth:.3f} ETH"
+                )
 
             if sleep_between:
                 time.sleep(sleep_between)
+
+            # Move to next epoch
+            slot = epoch_end + 1
 
     print(f"\n✅ Results saved/resumed in {filename}")
     print(f"Covered slots: {resume_slot} -> {end_slot}")
@@ -211,7 +290,7 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
 
 
 if __name__ == "__main__":
-    end_slot = 13523644
+    end_slot = 13523871
     start_slot = end_slot - 10000
 
     base_csv = query_epochs(start_slot, end_slot, interval=1)
