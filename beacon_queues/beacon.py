@@ -80,7 +80,7 @@ def sum_effective_eth(validators):
             continue
     return total_gwei / 1e9
 
-def get_beacon_processed_deposit_count(state_id="head"):
+def get_beacon_eth1_snapshot(state_id="head"):
     """
     Retrieve the cumulative deposit count from the beacon chain for a given state.
 
@@ -146,11 +146,12 @@ def get_beacon_processed_deposit_count(state_id="head"):
 
         # The cumulative deposit count recorded at this block
         deposit_count = eth1_data.get("deposit_count")
-        if deposit_count is None:
+        bh = eth1_data.get("block_hash")
+        if deposit_count is None or not bh:
             print("Block JSON missing eth1_data.deposit_count")
             return None
 
-        return int(deposit_count)
+        return int(deposit_count), bh  # bh is "0x..."
     except Exception as e:
         print(f"Failed to parse deposit_count: {e}")
         return None

@@ -1,10 +1,15 @@
 import os, csv
 
+
 CSV_HEADER = [
-    "epoch","slot","active_count","active_eth",
-    "entry_queue_count","entry_queue_eth",
-    "exit_queue_count","exit_queue_eth",
-    "el_backlog_events","el_backlog_eth","entry_total_estimated"
+    "epoch","slot",
+    "active_count","active_eth",
+    "entry_count","entry_eth",
+    "exit_count","exit_eth",
+    "beacon_deposit_count",
+    "eth1_block_hash",
+    "eth1_block_number",
+    "eth1_block_timestamp",
 ]
 
 def csv_has_header(path: str) -> bool:
@@ -30,3 +35,4 @@ def last_written_slot(path: str) -> int | None:
         except (ValueError, IndexError):
             return None
     return None
+
