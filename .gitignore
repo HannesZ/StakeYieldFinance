@@ -14,7 +14,9 @@ modified_file.csv
 .env
 
 # Ignore output files
-beacon_chain_queues.*
+beacon_chain_queues*.csv
+pending_deposits_slot_*.csv
+.~lock.*.csv#
 *.ods
 
 # Byte-compiled / optimized / DLL files
