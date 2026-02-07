@@ -23,19 +23,23 @@ from csv_io import CSV_HEADER, csv_has_header, last_written_slot
 # Pending deposits via Beacon API
 # -----------------------------
 
-def get_pending_deposits(state_id):
-    """
-    Retrieve pending deposits from the beacon chain for a given state.
-    Uses /eth/v1/beacon/states/{state_id}/pending_deposits endpoint.
+# Set to True for detailed algorithm logging (for debugging/verification)
+PENDING_DEPOSITS_DEBUG_LOGGING = True
 
-    Returns:
-        tuple: (pending_count, pending_eth) or (None, None) on failure
+# Window size as power of 2 (default 5 = 2^5 = 32 slots, matching epoch size)
+PENDING_DEPOSITS_WINDOW_POWER = 5
+
+
+def get_pending_deposits_data(slot):
     """
-    url = f"{BEACON_NODE_URL}/eth/v1/beacon/states/{state_id}/pending_deposits"
-    resp = get_with_retries(url)
+    Query pending deposits for a single slot.
+    Returns (pending_count, pending_eth) or (None, None) on failure.
+    """
+    url = f"{BEACON_NODE_URL}/eth/v1/beacon/states/{slot}/pending_deposits"
+    resp = get_with_retries(url, timeout=120)
 
     if resp is None or resp.status_code != 200:
-        print(f"Warning: Could not fetch pending deposits for state {state_id}")
+        print(f"Warning: Could not fetch pending deposits for state {slot}")
         return None, None
 
     try:
@@ -52,75 +56,31 @@ def get_pending_deposits(state_id):
         pending_eth = total_gwei / 1e9
         return pending_count, pending_eth
     except Exception as e:
-        print(f"Warning: Failed to parse pending deposits for state {state_id}: {e}")
+        print(f"Warning: Failed to parse pending deposits for state {slot}: {e}")
         return None, None
 
 
-def enrich_csv_with_pending_deposits(in_csv: str, out_csv: str):
-    """
-    Reads the base CSV and writes an enriched CSV with pending deposit backlog.
-    Uses the slot number from each row to query the beacon API for pending deposits.
-    """
-    rows = []
-
-    with open(in_csv, newline="") as f:
-        r = csv.DictReader(f)
-        header_in = r.fieldnames or []
-        for row in r:
-            rows.append(row)
-
-    if not rows:
-        raise RuntimeError("No rows found in input CSV.")
-
-    header_out = header_in + [
-        "pending_deposits_count",
-        "pending_deposits_eth",
-    ]
-
-    with open(out_csv, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=header_out)
-        w.writeheader()
-
-        for row in rows:
-            slot = row.get("slot")
-
-            if not slot:
-                row["pending_deposits_count"] = ""
-                row["pending_deposits_eth"] = ""
-                w.writerow(row)
-                continue
-
-            pending_count, pending_eth = get_pending_deposits(state_id=slot)
-
-            if pending_count is not None:
-                row["pending_deposits_count"] = str(pending_count)
-                row["pending_deposits_eth"] = f"{pending_eth:.9f}"
-            else:
-                row["pending_deposits_count"] = ""
-                row["pending_deposits_eth"] = ""
-
-            print(f"Slot {slot}: {pending_count} pending deposits ({pending_eth:.3f} ETH)" if pending_count else f"Slot {slot}: no data")
-            w.writerow(row)
-
-
-# -----------------------------
-# Exit queue binary search optimization
-# -----------------------------
-
-def get_exit_queue_data(slot):
-    """Query exit queue for a single slot, returns (count, eth)."""
-    exit_queue = get_validators_by_status(state_id=slot, status="active_exiting,active_slashed")
-    return len(exit_queue), sum_effective_eth(exit_queue)
-
-
-def find_exit_queue_changes_recursive(slots, cache):
+def find_pending_deposits_changes_recursive(slots, cache, depth=0):
     """
     Recursively find change points using binary search.
     Fills cache with queried slots only (change points).
     """
+    indent = "    " * (depth + 1)  # Indentation for logging
+
+    if PENDING_DEPOSITS_DEBUG_LOGGING:
+        print(f"{indent}[depth={depth}] Processing range: slots {slots[0]} to {slots[-1]} ({len(slots)} slots)" if slots else f"{indent}[depth={depth}] Empty slots list")
+
     if len(slots) <= 1:
         if slots and slots[0] not in cache:
-            cache[slots[0]] = get_exit_queue_data(slots[0])
+            data = get_pending_deposits_data(slots[0])
+            cache[slots[0]] = data
+            if PENDING_DEPOSITS_DEBUG_LOGGING:
+                if data[0] is not None:
+                    print(f"{indent}  -> QUERY slot {slots[0]}: count={data[0]}, eth={data[1]:.3f} (single slot)")
+                else:
+                    print(f"{indent}  -> QUERY slot {slots[0]}: FAILED (single slot)")
+        elif slots and PENDING_DEPOSITS_DEBUG_LOGGING:
+            print(f"{indent}  -> CACHED slot {slots[0]}: count={cache[slots[0]][0]} (already queried)")
         return
 
     first_slot = slots[0]
@@ -128,42 +88,102 @@ def find_exit_queue_changes_recursive(slots, cache):
 
     # Get data for first and last slots (use cache if available)
     if first_slot not in cache:
-        cache[first_slot] = get_exit_queue_data(first_slot)
+        data = get_pending_deposits_data(first_slot)
+        cache[first_slot] = data
+        if PENDING_DEPOSITS_DEBUG_LOGGING:
+            if data[0] is not None:
+                print(f"{indent}  -> QUERY first slot {first_slot}: count={data[0]}, eth={data[1]:.3f}")
+            else:
+                print(f"{indent}  -> QUERY first slot {first_slot}: FAILED")
+    elif PENDING_DEPOSITS_DEBUG_LOGGING:
+        print(f"{indent}  -> CACHED first slot {first_slot}: count={cache[first_slot][0]}")
+
     if last_slot not in cache:
-        cache[last_slot] = get_exit_queue_data(last_slot)
+        data = get_pending_deposits_data(last_slot)
+        cache[last_slot] = data
+        if PENDING_DEPOSITS_DEBUG_LOGGING:
+            if data[0] is not None:
+                print(f"{indent}  -> QUERY last slot {last_slot}: count={data[0]}, eth={data[1]:.3f}")
+            else:
+                print(f"{indent}  -> QUERY last slot {last_slot}: FAILED")
+    elif PENDING_DEPOSITS_DEBUG_LOGGING:
+        print(f"{indent}  -> CACHED last slot {last_slot}: count={cache[last_slot][0]}")
+
+    first_data = cache[first_slot]
+    last_data = cache[last_slot]
+
+    # Handle failed queries - mark all slots in range as failed
+    if first_data[0] is None or last_data[0] is None:
+        if PENDING_DEPOSITS_DEBUG_LOGGING:
+            print(f"{indent}  => Query failed, marking all {len(slots)} slots in range as failed")
+        for s in slots:
+            if s not in cache:
+                cache[s] = (None, None)
+        return
+
+    first_count = first_data[0]
+    last_count = last_data[0]
 
     # If same count, no changes in this range (don't recurse)
-    if cache[first_slot][0] == cache[last_slot][0]:
+    if first_count == last_count:
+        if PENDING_DEPOSITS_DEBUG_LOGGING:
+            print(f"{indent}  => SAME count ({first_count}) at both ends - no changes in range, skipping recursion")
         return
 
     # If adjacent slots with different values, we've found the boundary
     if len(slots) == 2:
+        if PENDING_DEPOSITS_DEBUG_LOGGING:
+            print(f"{indent}  => BOUNDARY FOUND between slot {first_slot} (count={first_count}) and {last_slot} (count={last_count})")
         return
 
     # Different and not adjacent - query middle and recurse both halves
     mid_idx = len(slots) // 2
     mid_slot = slots[mid_idx]
 
+    if PENDING_DEPOSITS_DEBUG_LOGGING:
+        print(f"{indent}  => DIFFERENT counts (first={first_count}, last={last_count}) - splitting at middle slot {mid_slot}")
+
     if mid_slot not in cache:
-        cache[mid_slot] = get_exit_queue_data(mid_slot)
+        data = get_pending_deposits_data(mid_slot)
+        cache[mid_slot] = data
+        if PENDING_DEPOSITS_DEBUG_LOGGING:
+            if data[0] is not None:
+                print(f"{indent}  -> QUERY middle slot {mid_slot}: count={data[0]}, eth={data[1]:.3f}")
+            else:
+                print(f"{indent}  -> QUERY middle slot {mid_slot}: FAILED")
+    elif PENDING_DEPOSITS_DEBUG_LOGGING:
+        print(f"{indent}  -> CACHED middle slot {mid_slot}: count={cache[mid_slot][0]}")
 
     # Recurse on left half [first, mid] and right half [mid, last]
-    find_exit_queue_changes_recursive(slots[:mid_idx + 1], cache)
-    find_exit_queue_changes_recursive(slots[mid_idx:], cache)
+    if PENDING_DEPOSITS_DEBUG_LOGGING:
+        print(f"{indent}  => Recursing LEFT: slots {first_slot} to {mid_slot}")
+    find_pending_deposits_changes_recursive(slots[:mid_idx + 1], cache, depth + 1)
+
+    if PENDING_DEPOSITS_DEBUG_LOGGING:
+        print(f"{indent}  => Recursing RIGHT: slots {mid_slot} to {last_slot}")
+    find_pending_deposits_changes_recursive(slots[mid_idx:], cache, depth + 1)
 
 
-def find_exit_queue_changes(slots):
+def find_pending_deposits_changes(slots):
     """
-    Use binary search to find exit queue changes within a list of slots.
-    Returns a dict mapping slot -> (exit_count, exit_eth).
+    Use binary search to find pending deposit changes within a list of slots.
+    Returns a dict mapping slot -> (pending_count, pending_eth).
     """
     if not slots:
         return {}
 
+    if PENDING_DEPOSITS_DEBUG_LOGGING:
+        print(f"\n  === Pending Deposits Binary Search Start ===")
+        print(f"  Input: {len(slots)} slots from {slots[0]} to {slots[-1]}")
+
     cache = {}
 
     # Find all change points via binary search
-    find_exit_queue_changes_recursive(slots, cache)
+    find_pending_deposits_changes_recursive(slots, cache, depth=0)
+
+    if PENDING_DEPOSITS_DEBUG_LOGGING:
+        print(f"\n  === Filling in gaps ===")
+        print(f"  Queried {len(cache)} slots: {sorted(cache.keys())}")
 
     # Fill in all slots by propagating values forward from queried slots
     result = {}
@@ -176,7 +196,269 @@ def find_exit_queue_changes(slots):
         while q_idx < len(queried_slots) - 1 and queried_slots[q_idx + 1] <= slot:
             q_idx += 1
             current_data = cache[queried_slots[q_idx]]
+            if PENDING_DEPOSITS_DEBUG_LOGGING:
+                print(f"    Slot {slot}: switching to queried value from slot {queried_slots[q_idx]} (count={current_data[0]})")
         result[slot] = current_data
+
+    if PENDING_DEPOSITS_DEBUG_LOGGING:
+        # Show the final mapping summary
+        unique_values = {}
+        for s, data in result.items():
+            count = data[0] if data[0] is not None else "FAILED"
+            if count not in unique_values:
+                unique_values[count] = []
+            unique_values[count].append(s)
+
+        print(f"\n  === Result Summary ===")
+        for count, slot_list in sorted(unique_values.items(), key=lambda x: (x[0] is None, x[0] or 0)):
+            if len(slot_list) <= 6:
+                print(f"    count={count}: slots {slot_list}")
+            else:
+                print(f"    count={count}: slots {slot_list[0]}-{slot_list[-1]} ({len(slot_list)} slots)")
+        print(f"  === Pending Deposits Binary Search End ===\n")
+
+    return result
+
+
+def enrich_csv_with_pending_deposits(in_csv: str, out_csv: str, window_power: int = PENDING_DEPOSITS_WINDOW_POWER):
+    """
+    Reads the base CSV and writes an enriched CSV with pending deposit backlog.
+    Uses binary search within windows of size 2^window_power slots.
+
+    Args:
+        in_csv: Input CSV file path
+        out_csv: Output CSV file path
+        window_power: Power of 2 for window size (default 5 = 32 slots)
+    """
+    window_size = 2 ** window_power
+
+    rows = []
+    with open(in_csv, newline="") as f:
+        r = csv.DictReader(f)
+        header_in = r.fieldnames or []
+        for row in r:
+            rows.append(row)
+
+    if not rows:
+        raise RuntimeError("No rows found in input CSV.")
+
+    # Extract all slots
+    all_slots = []
+    for row in rows:
+        slot = row.get("slot")
+        if slot:
+            all_slots.append(int(slot))
+
+    if not all_slots:
+        raise RuntimeError("No slots found in input CSV.")
+
+    print(f"\n{'='*80}")
+    print(f"Enriching CSV with pending deposits")
+    print(f"Window size: 2^{window_power} = {window_size} slots")
+    print(f"Total slots to process: {len(all_slots)}")
+    print(f"{'='*80}")
+
+    # Process slots in windows and build complete cache
+    pending_cache = {}
+    min_slot = min(all_slots)
+    max_slot = max(all_slots)
+
+    window_start = min_slot
+    window_num = 0
+    while window_start <= max_slot:
+        window_end = window_start + window_size - 1
+        window_slots = [s for s in all_slots if window_start <= s <= window_end]
+
+        if window_slots:
+            window_num += 1
+            print(f"\n{'*'*80}")
+            print(f"Window {window_num}: slots {window_start} to {min(window_end, max_slot)} ({len(window_slots)} slots in CSV)")
+            print(f"{'*'*80}")
+
+            window_result = find_pending_deposits_changes(window_slots)
+            pending_cache.update(window_result)
+
+        window_start = window_end + 1
+
+    # Write output CSV
+    header_out = header_in + [
+        "pending_deposits_count",
+        "pending_deposits_eth",
+    ]
+
+    with open(out_csv, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=header_out)
+        w.writeheader()
+
+        for row in rows:
+            slot = row.get("slot")
+
+            if not slot or int(slot) not in pending_cache:
+                row["pending_deposits_count"] = ""
+                row["pending_deposits_eth"] = ""
+                w.writerow(row)
+                continue
+
+            pending_count, pending_eth = pending_cache[int(slot)]
+
+            if pending_count is not None:
+                row["pending_deposits_count"] = str(pending_count)
+                row["pending_deposits_eth"] = f"{pending_eth:.9f}"
+            else:
+                row["pending_deposits_count"] = ""
+                row["pending_deposits_eth"] = ""
+
+            w.writerow(row)
+
+    print(f"\n{'='*80}")
+    print(f"Enrichment complete. Total API queries: {len(set(pending_cache.keys()))}")
+    print(f"{'='*80}")
+
+
+# -----------------------------
+# Exit queue binary search optimization
+# -----------------------------
+
+# Set to True for detailed algorithm logging (for debugging/verification)
+EXIT_QUEUE_DEBUG_LOGGING = True
+
+def get_exit_queue_data(slot):
+    """Query exit queue for a single slot, returns (count, eth)."""
+    exit_queue = get_validators_by_status(state_id=slot, status="active_exiting,active_slashed")
+    return len(exit_queue), sum_effective_eth(exit_queue)
+
+
+def find_exit_queue_changes_recursive(slots, cache, depth=0):
+    """
+    Recursively find change points using binary search.
+    Fills cache with queried slots only (change points).
+    """
+    indent = "    " * (depth + 1)  # Indentation for logging
+
+    if EXIT_QUEUE_DEBUG_LOGGING:
+        print(f"{indent}[depth={depth}] Processing range: slots {slots[0]} to {slots[-1]} ({len(slots)} slots)" if slots else f"{indent}[depth={depth}] Empty slots list")
+
+    if len(slots) <= 1:
+        if slots and slots[0] not in cache:
+            data = get_exit_queue_data(slots[0])
+            cache[slots[0]] = data
+            if EXIT_QUEUE_DEBUG_LOGGING:
+                print(f"{indent}  -> QUERY slot {slots[0]}: count={data[0]}, eth={data[1]:.3f} (single slot)")
+        elif slots and EXIT_QUEUE_DEBUG_LOGGING:
+            print(f"{indent}  -> CACHED slot {slots[0]}: count={cache[slots[0]][0]} (already queried)")
+        return
+
+    first_slot = slots[0]
+    last_slot = slots[-1]
+
+    # Get data for first and last slots (use cache if available)
+    if first_slot not in cache:
+        data = get_exit_queue_data(first_slot)
+        cache[first_slot] = data
+        if EXIT_QUEUE_DEBUG_LOGGING:
+            print(f"{indent}  -> QUERY first slot {first_slot}: count={data[0]}, eth={data[1]:.3f}")
+    elif EXIT_QUEUE_DEBUG_LOGGING:
+        print(f"{indent}  -> CACHED first slot {first_slot}: count={cache[first_slot][0]}")
+
+    if last_slot not in cache:
+        data = get_exit_queue_data(last_slot)
+        cache[last_slot] = data
+        if EXIT_QUEUE_DEBUG_LOGGING:
+            print(f"{indent}  -> QUERY last slot {last_slot}: count={data[0]}, eth={data[1]:.3f}")
+    elif EXIT_QUEUE_DEBUG_LOGGING:
+        print(f"{indent}  -> CACHED last slot {last_slot}: count={cache[last_slot][0]}")
+
+    first_count = cache[first_slot][0]
+    last_count = cache[last_slot][0]
+
+    # If same count, no changes in this range (don't recurse)
+    if first_count == last_count:
+        if EXIT_QUEUE_DEBUG_LOGGING:
+            print(f"{indent}  => SAME count ({first_count}) at both ends - no changes in range, skipping recursion")
+        return
+
+    # If adjacent slots with different values, we've found the boundary
+    if len(slots) == 2:
+        if EXIT_QUEUE_DEBUG_LOGGING:
+            print(f"{indent}  => BOUNDARY FOUND between slot {first_slot} (count={first_count}) and {last_slot} (count={last_count})")
+        return
+
+    # Different and not adjacent - query middle and recurse both halves
+    mid_idx = len(slots) // 2
+    mid_slot = slots[mid_idx]
+
+    if EXIT_QUEUE_DEBUG_LOGGING:
+        print(f"{indent}  => DIFFERENT counts (first={first_count}, last={last_count}) - splitting at middle slot {mid_slot}")
+
+    if mid_slot not in cache:
+        data = get_exit_queue_data(mid_slot)
+        cache[mid_slot] = data
+        if EXIT_QUEUE_DEBUG_LOGGING:
+            print(f"{indent}  -> QUERY middle slot {mid_slot}: count={data[0]}, eth={data[1]:.3f}")
+    elif EXIT_QUEUE_DEBUG_LOGGING:
+        print(f"{indent}  -> CACHED middle slot {mid_slot}: count={cache[mid_slot][0]}")
+
+    # Recurse on left half [first, mid] and right half [mid, last]
+    if EXIT_QUEUE_DEBUG_LOGGING:
+        print(f"{indent}  => Recursing LEFT: slots {first_slot} to {mid_slot}")
+    find_exit_queue_changes_recursive(slots[:mid_idx + 1], cache, depth + 1)
+
+    if EXIT_QUEUE_DEBUG_LOGGING:
+        print(f"{indent}  => Recursing RIGHT: slots {mid_slot} to {last_slot}")
+    find_exit_queue_changes_recursive(slots[mid_idx:], cache, depth + 1)
+
+
+def find_exit_queue_changes(slots):
+    """
+    Use binary search to find exit queue changes within a list of slots.
+    Returns a dict mapping slot -> (exit_count, exit_eth).
+    """
+    if not slots:
+        return {}
+
+    if EXIT_QUEUE_DEBUG_LOGGING:
+        print(f"\n  === Binary Search Algorithm Start ===")
+        print(f"  Input: {len(slots)} slots from {slots[0]} to {slots[-1]}")
+
+    cache = {}
+
+    # Find all change points via binary search
+    find_exit_queue_changes_recursive(slots, cache, depth=0)
+
+    if EXIT_QUEUE_DEBUG_LOGGING:
+        print(f"\n  === Filling in gaps ===")
+        print(f"  Queried {len(cache)} slots: {sorted(cache.keys())}")
+
+    # Fill in all slots by propagating values forward from queried slots
+    result = {}
+    queried_slots = sorted(cache.keys())
+    current_data = cache[queried_slots[0]]
+
+    q_idx = 0
+    for slot in slots:
+        # Move to next queried slot if we've passed it
+        while q_idx < len(queried_slots) - 1 and queried_slots[q_idx + 1] <= slot:
+            q_idx += 1
+            current_data = cache[queried_slots[q_idx]]
+            if EXIT_QUEUE_DEBUG_LOGGING:
+                print(f"    Slot {slot}: switching to queried value from slot {queried_slots[q_idx]} (count={current_data[0]})")
+        result[slot] = current_data
+
+    if EXIT_QUEUE_DEBUG_LOGGING:
+        # Show the final mapping summary
+        unique_values = {}
+        for s, data in result.items():
+            if data[0] not in unique_values:
+                unique_values[data[0]] = []
+            unique_values[data[0]].append(s)
+
+        print(f"\n  === Result Summary ===")
+        for count, slot_list in sorted(unique_values.items()):
+            if len(slot_list) <= 6:
+                print(f"    count={count}: slots {slot_list}")
+            else:
+                print(f"    count={count}: slots {slot_list[0]}-{slot_list[-1]} ({len(slot_list)} slots)")
+        print(f"  === Binary Search Algorithm End ===\n")
 
     return result
 
@@ -290,8 +572,8 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
 
 
 if __name__ == "__main__":
-    end_slot = 13523871
-    start_slot = end_slot - 10000
+    end_slot = 	13638943
+    start_slot = end_slot - 5000
 
     base_csv = query_epochs(start_slot, end_slot, interval=1)
 
