@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import csv
+import os
+import shutil
 import time
 
 from config import EXECUTION_RPC_URL
@@ -254,3 +256,10 @@ if __name__ == "__main__":
         out_csv=enriched_csv,
     )
     print(f"✅ Enriched CSV written to {enriched_csv}")
+
+    # Move the base CSV to archive now that the enriched version exists
+    archive_dir = os.path.join(os.path.dirname(base_csv) or ".", "archive")
+    os.makedirs(archive_dir, exist_ok=True)
+    archived_path = os.path.join(archive_dir, os.path.basename(base_csv))
+    shutil.move(base_csv, archived_path)
+    print(f"📦 Base CSV archived to {archived_path}")
