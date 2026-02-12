@@ -1,6 +1,8 @@
 from config import BEACON_NODE_URL, DEPOSIT_CONTRACT_ADDRESS
 from http_helper import get_with_retries
 
+ZERO_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
 def get_deposit_contract_address_from_beacon():
     """
     Retrieve the deposit contract address from the beacon node’s REST API.
@@ -79,6 +81,42 @@ def sum_effective_eth(validators):
         except (KeyError, ValueError, TypeError):
             continue
     return total_gwei / 1e9
+
+
+def get_exit_queue_data(slot):
+    """Query exit queue for a single slot, returns (count, eth)."""
+    exit_queue = get_validators_by_status(state_id=slot, status="active_exiting,active_slashed")
+    return len(exit_queue), sum_effective_eth(exit_queue)
+
+
+def get_pending_deposits_data(slot):
+    """
+    Query pending deposits for a single slot.
+    Returns (pending_count, pending_eth) or (None, None) on failure.
+    """
+    url = f"{BEACON_NODE_URL}/eth/v1/beacon/states/{slot}/pending_deposits"
+    resp = get_with_retries(url, timeout=120)
+
+    if resp is None or resp.status_code != 200:
+        print(f"Warning: Could not fetch pending deposits for state {slot}")
+        return None, None
+
+    try:
+        data = resp.json().get("data", [])
+        pending_count = len(data)
+
+        # Sum up the amounts (amounts are in Gwei)
+        total_gwei = 0
+        for deposit in data:
+            amount = deposit.get("amount")
+            if amount:
+                total_gwei += int(amount)
+
+        pending_eth = total_gwei / 1e9
+        return pending_count, pending_eth
+    except Exception as e:
+        print(f"Warning: Failed to parse pending deposits for state {slot}: {e}")
+        return None, None
 
 def get_beacon_eth1_snapshot(state_id="head"):
     """
