@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 import csv
-import os
-import shutil
 import time
 
 from config import EXECUTION_RPC_URL
@@ -19,12 +17,13 @@ from beacon import (
 from beacon_helper import resolve_el_block_hash
 from binary_search import find_changes
 from csv_io import CSV_HEADER, csv_has_header, last_written_slot
+from history import historise
 
 
 # -----------------------------
 # Debug logging (set to False to disable)
 # -----------------------------
-EXIT_QUEUE_DEBUG_LOGGING = True
+EXIT_QUEUE_DEBUG_LOGGING = False
 PENDING_DEPOSITS_DEBUG_LOGGING = True
 
 # Window size as power of 2 (default 5 = 2^5 = 32 slots, matching epoch size)
@@ -244,8 +243,8 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
 
 
 if __name__ == "__main__":
-    end_slot = 13673437
-    start_slot = 13656524  # ~20 epochs back
+    end_slot =  13715606
+    start_slot = 13715606 -20*32 # ~20 epochs back
 
     base_csv = query_epochs(start_slot, end_slot, interval=1)
 
@@ -257,9 +256,5 @@ if __name__ == "__main__":
     )
     print(f"✅ Enriched CSV written to {enriched_csv}")
 
-    # Move the base CSV to archive now that the enriched version exists
-    archive_dir = os.path.join(os.path.dirname(base_csv) or ".", "archive")
-    os.makedirs(archive_dir, exist_ok=True)
-    archived_path = os.path.join(archive_dir, os.path.basename(base_csv))
-    shutil.move(base_csv, archived_path)
-    print(f"📦 Base CSV archived to {archived_path}")
+    # Step 3+4: Archive base CSV, move enriched CSV to data/, append to history
+    historise(base_csv, enriched_csv, start_slot, end_slot)
