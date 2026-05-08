@@ -19,6 +19,15 @@ pending_deposits_slot_*.csv
 .~lock.*.csv#
 *.ods
 
+# Node / Hardhat
+node_modules/
+protocol/node_modules/
+protocol/artifacts/
+protocol/cache/
+protocol/typechain-types/
+package-lock.json
+protocol/package-lock.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
