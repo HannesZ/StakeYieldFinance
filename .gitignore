@@ -59,3 +59,5 @@ cache/deposit_metadata.cache.json
 data/history.csv
 data/history_daily_backfill.csv
 data/history.xlsx
+.env
+protocol/.env
