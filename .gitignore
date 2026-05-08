@@ -55,3 +55,4 @@ htmlcov/
 .vscode/
 .idea/
 cache/deposit_metadata.cache.json
+*.stdout
