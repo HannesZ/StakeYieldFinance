@@ -243,8 +243,8 @@ def query_epochs(start_slot, end_slot, interval=1, filename=None, sleep_between=
 
 
 if __name__ == "__main__":
-    end_slot =  13715606
-    start_slot = 13715606 -20*32 # ~20 epochs back
+    end_slot =  13588360
+    start_slot = 13588360 -200*32 # ~20 epochs back
 
     base_csv = query_epochs(start_slot, end_slot, interval=1)
 
