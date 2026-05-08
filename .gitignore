@@ -56,3 +56,6 @@ htmlcov/
 .idea/
 cache/deposit_metadata.cache.json
 *.stdout
+data/history.csv
+data/history_daily_backfill.csv
+data/history.xlsx
