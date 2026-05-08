@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETH Staking Yield Swap Pricer</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e4e6eb;
+    --muted: #8b8fa3;
+    --accent: #6366f1;
+    --accent-hover: #818cf8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --orange: #f59e0b;
+    --blue: #3b82f6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h1 .eth-icon {
+    width: 28px; height: 28px;
+    background: linear-gradient(135deg, #627eea, #3b4bd8);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: white;
+  }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 24px; }
+
+  .grid { display: grid; grid-template-columns: 340px 1fr; gap: 20px; }
+  @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .card h2 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  .field { margin-bottom: 16px; }
+  .field label {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+  .field input, .field select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .field input:focus, .field select:focus {
+    border-color: var(--accent);
+  }
+  .field .hint {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  .inline-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 16px 0;
+  }
+
+  /* Results */
+  .result-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .result-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .result-box.highlight {
+    border-color: var(--accent);
+    background: rgba(99, 102, 241, 0.08);
+  }
+  .result-box .label {
+    font-size: 0.72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+  }
+  .result-box .value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .result-box .sub {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .result-box.wide { grid-column: 1 / -1; }
+
+  .color-green { color: var(--green); }
+  .color-red { color: var(--red); }
+  .color-orange { color: var(--orange); }
+  .color-blue { color: var(--blue); }
+  .color-accent { color: var(--accent); }
+
+  /* Rate bar comparison */
+  .rate-bars { margin-top: 16px; }
+  .rate-bar-item {
+    margin-bottom: 10px;
+  }
+  .rate-bar-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.78rem;
+    margin-bottom: 4px;
+  }
+  .rate-bar-header .name { color: var(--muted); }
+  .rate-bar-header .val { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .rate-bar-track {
+    height: 8px;
+    background: var(--bg);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+  }
+  .rate-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.4s ease;
+  }
+
+  /* Confidence range display */
+  .confidence {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-top: 12px;
+  }
+  .confidence h3 {
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 10px;
+  }
+  .conf-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    font-size: 0.82rem;
+  }
+  .conf-row .conf-label { color: var(--muted); }
+  .conf-row .conf-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* Chart area */
+  .chart-area {
+    position: relative;
+    width: 100%;
+    height: 260px;
+    margin-top: 12px;
+  }
+  canvas { width: 100%; height: 100%; }
+
+  /* Info footer */
+  .info {
+    margin-top: 16px;
+    font-size: 0.72rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .info strong { color: var(--text); font-weight: 600; }
+
+  .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .spinner {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 10px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>
+    <span class="eth-icon">Ξ</span>
+    ETH Staking Yield Swap Pricer
+  </h1>
+  <p class="subtitle">Model-derived fixed rates for staking yield swaps · Monte Carlo (1,000 paths)</p>
+
+  <div class="grid">
+    <!-- LEFT: Inputs -->
+    <div>
+      <div class="card">
+        <h2>Swap Parameters</h2>
+
+        <div class="field">
+          <label>Start Date</label>
+          <input type="date" id="startDate">
+          <div class="hint">When the swap period begins (today = spot-starting)</div>
+        </div>
+
+        <div class="field">
+          <label>Tenor</label>
+          <select id="tenorPreset">
+            <option value="90">3 Months</option>
+            <option value="180">6 Months</option>
+            <option value="365" selected>1 Year</option>
+            <option value="730">2 Years</option>
+            <option value="1095">3 Years</option>
+            <option value="custom">Custom Days</option>
+          </select>
+        </div>
+
+        <div class="field" id="customTenorField" style="display:none;">
+          <label>Custom Tenor (days)</label>
+          <input type="number" id="customTenor" min="7" max="1095" value="365">
+        </div>
+
+        <hr class="divider">
+
+        <div class="field">
+          <label>Protocol Spread (bp)</label>
+          <input type="number" id="spread" value="50" min="0" max="500" step="5">
+          <div class="hint">Basis points deducted by the protocol (fee + margin)</div>
+        </div>
+
+        <div class="field">
+          <label>Additional Margin (bp)</label>
+          <input type="number" id="margin" value="0" min="0" max="200" step="5">
+          <div class="hint">Extra margin for the fixed-rate payer (optional)</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 16px;">
+        <h2>Model Info</h2>
+        <div class="info">
+          <strong>Model:</strong> Merton jump-diffusion for deposit flows + stochastic exits<br>
+          <strong>CL Yield:</strong> 64 × 82,125 / √(active_ETH × 10⁹) + EL premium<br>
+          <strong>Data:</strong> <span id="infoActiveEth">—</span> active ETH as of <span id="infoModelStart">—</span><br>
+          <strong>Simulations:</strong> <span id="infoSims">—</span> Monte Carlo paths, <span id="infoDays">—</span> day horizon
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Results -->
+    <div>
+      <div class="card" id="resultsCard">
+        <h2>Pricing Result</h2>
+        <div class="loading" id="loadingMsg">
+          <div class="spinner"></div>
+          Loading model data…
+        </div>
+
+        <div id="results" style="display:none;">
+          <div class="result-grid">
+            <div class="result-box">
+              <div class="label">Current Spot APR</div>
+              <div class="value color-blue" id="spotApr">—</div>
+              <div class="sub">Live staking yield</div>
+            </div>
+            <div class="result-box highlight">
+              <div class="label">Fair Fixed Rate</div>
+              <div class="value color-accent" id="fairRate">—</div>
+              <div class="sub">Model expected avg over tenor</div>
+            </div>
+            <div class="result-box">
+              <div class="label">Rate After Spread</div>
+              <div class="value color-green" id="netRate">—</div>
+              <div class="sub">What the swap buyer receives</div>
+            </div>
+            <div class="result-box">
+              <div class="label">Net Rate vs. Spot</div>
+              <div class="value" id="discount">—</div>
+              <div class="sub" id="discountSub">Swap buyer rate minus current spot APR</div>
+            </div>
+          </div>
+
+          <!-- Rate bar comparison -->
+          <div class="rate-bars">
+            <div class="rate-bar-item">
+              <div class="rate-bar-header">
+                <span class="name">Current Spot APR</span>
+                <span class="val color-blue" id="barSpot">—</span>
+              </div>
+              <div class="rate-bar-track">
+                <div class="rate-bar-fill" id="barSpotFill" style="background: var(--blue);"></div>
+              </div>
+            </div>
+            <div class="rate-bar-item">
+              <div class="rate-bar-header">
+                <span class="name">Fair Fixed Rate (model)</span>
+                <span class="val color-accent" id="barFair">—</span>
+              </div>
+              <div class="rate-bar-track">
+                <div class="rate-bar-fill" id="barFairFill" style="background: var(--accent);"></div>
+              </div>
+            </div>
+            <div class="rate-bar-item">
+              <div class="rate-bar-header">
+                <span class="name">Swap Buyer Receives</span>
+                <span class="val color-green" id="barNet">—</span>
+              </div>
+              <div class="rate-bar-track">
+                <div class="rate-bar-fill" id="barNetFill" style="background: var(--green);"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Confidence intervals -->
+          <div class="confidence">
+            <h3>Confidence Range (fair rate, before spread)</h3>
+            <div class="conf-row">
+              <span class="conf-label">p5 (bearish — more staking)</span>
+              <span class="conf-value" id="confP5">—</span>
+            </div>
+            <div class="conf-row">
+              <span class="conf-label">p25</span>
+              <span class="conf-value" id="confP25">—</span>
+            </div>
+            <div class="conf-row">
+              <span class="conf-label">p50 (median)</span>
+              <span class="conf-value" id="confP50">—</span>
+            </div>
+            <div class="conf-row">
+              <span class="conf-label">p75</span>
+              <span class="conf-value" id="confP75">—</span>
+            </div>
+            <div class="conf-row">
+              <span class="conf-label">p95 (bullish — less staking)</span>
+              <span class="conf-value" id="confP95">—</span>
+            </div>
+          </div>
+
+          <!-- Forward-start info -->
+          <div class="confidence" id="forwardInfo" style="display:none; margin-top: 12px;">
+            <h3>Forward Start</h3>
+            <div class="conf-row">
+              <span class="conf-label">Days until start</span>
+              <span class="conf-value" id="fwdDays">—</span>
+            </div>
+            <div class="conf-row">
+              <span class="conf-label">Expected APR at start</span>
+              <span class="conf-value" id="fwdStartApr">—</span>
+            </div>
+            <div class="conf-row">
+              <span class="conf-label">Expected APR at maturity</span>
+              <span class="conf-value" id="fwdEndApr">—</span>
+            </div>
+          </div>
+
+          <div class="info" style="margin-top: 16px;">
+            <strong>How to read:</strong> The <em>fair fixed rate</em> is the model-expected average staking APR
+            over the swap period. A swap buyer locks in this rate (minus protocol spread) instead of
+            receiving the variable staking yield. If staking APR falls below the fixed rate, the buyer profits.
+            <br><br>
+            <strong>Note:</strong> Model uncertainty (p5–p95) is narrow because the consensus-layer yield formula
+            is deterministic given total staked ETH. Real uncertainty from MEV variability, protocol changes,
+            or issuance reform is not captured.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let DATA = null;
+
+async function loadData() {
+  try {
+    const resp = await fetch('./data/swap_surface.json');
+    if (!resp.ok) {
+      // Try relative to gui/
+      const resp2 = await fetch('../data/swap_surface.json');
+      DATA = await resp2.json();
+    } else {
+      DATA = await resp.json();
+    }
+  } catch(e) {
+    // Try loading from a global if embedded
+    if (window.__SWAP_DATA__) {
+      DATA = window.__SWAP_DATA__;
+    } else {
+      document.getElementById('loadingMsg').innerHTML =
+        '<span style="color:var(--red)">Failed to load model data. Ensure swap_surface.json is accessible.</span>';
+      return;
+    }
+  }
+
+  // Populate info
+  document.getElementById('infoActiveEth').textContent =
+    Number(DATA.active_eth).toLocaleString('en-US', {maximumFractionDigits: 0}) + ' ETH';
+  document.getElementById('infoModelStart').textContent = DATA.model_start;
+  document.getElementById('infoSims').textContent = DATA.n_sims.toLocaleString();
+  document.getElementById('infoDays').textContent = DATA.days.toLocaleString();
+
+  // Set default start date to today
+  const today = new Date();
+  const modelStart = new Date(DATA.model_start);
+  const maxDate = new Date(modelStart);
+  maxDate.setDate(maxDate.getDate() + DATA.days);
+
+  const startInput = document.getElementById('startDate');
+  startInput.value = fmt(today);
+  startInput.min = fmt(modelStart);
+  startInput.max = fmt(maxDate);
+
+  document.getElementById('loadingMsg').style.display = 'none';
+  document.getElementById('results').style.display = 'block';
+
+  compute();
+}
+
+function fmt(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function daysBetween(a, b) {
+  return Math.round((b - a) / 86400000);
+}
+
+function avgBetween(prefixArr, dayStart, dayEnd) {
+  // Average of arr[dayStart..dayEnd] using prefix sums
+  // prefix[i] = sum of arr[0..i]
+  if (dayEnd >= prefixArr.length) dayEnd = prefixArr.length - 1;
+  if (dayStart < 0) dayStart = 0;
+  if (dayStart > dayEnd) return prefixArr[dayEnd] / (dayEnd + 1);
+  const sumEnd = prefixArr[dayEnd];
+  const sumStart = dayStart > 0 ? prefixArr[dayStart - 1] : 0;
+  return (sumEnd - sumStart) / (dayEnd - dayStart + 1);
+}
+
+function compute() {
+  if (!DATA) return;
+
+  const modelStart = new Date(DATA.model_start);
+  const startDate = new Date(document.getElementById('startDate').value);
+
+  const tenorPreset = document.getElementById('tenorPreset').value;
+  let tenor;
+  if (tenorPreset === 'custom') {
+    tenor = parseInt(document.getElementById('customTenor').value) || 365;
+  } else {
+    tenor = parseInt(tenorPreset);
+  }
+
+  const spreadBp = parseFloat(document.getElementById('spread').value) || 0;
+  const marginBp = parseFloat(document.getElementById('margin').value) || 0;
+  const totalSpreadPct = (spreadBp + marginBp) / 100;
+
+  // Convert dates to model day offsets
+  const dayOffset = Math.max(0, daysBetween(modelStart, startDate));
+  const dayEnd = dayOffset + tenor;
+
+  // Clamp to available data
+  const maxDay = DATA.days;
+  const clampedEnd = Math.min(dayEnd, maxDay);
+  const clampedStart = Math.min(dayOffset, maxDay - 1);
+
+  if (clampedStart >= clampedEnd) {
+    document.getElementById('fairRate').textContent = '—';
+    document.getElementById('netRate').textContent = '—';
+    return;
+  }
+
+  // Compute average rates over tenor window
+  const fairMean = avgBetween(DATA.prefix_mean, clampedStart, clampedEnd);
+  const fairP5 = avgBetween(DATA.prefix_p5, clampedStart, clampedEnd);
+  const fairP50 = avgBetween(DATA.prefix_p50, clampedStart, clampedEnd);
+  const fairP95 = avgBetween(DATA.prefix_p95, clampedStart, clampedEnd);
+
+  // For p25/p75 we don't have prefix sums, approximate from mean_apr array
+  // Actually compute from the daily arrays directly
+  let sumP25 = 0, sumP75 = 0;
+  let count = 0;
+  for (let d = clampedStart; d <= clampedEnd && d < DATA.p25.length; d++) {
+    sumP25 += DATA.p25[d];
+    sumP75 += DATA.p75[d];
+    count++;
+  }
+  const fairP25 = count > 0 ? sumP25 / count : 0;
+  const fairP75 = count > 0 ? sumP75 / count : 0;
+
+  const netRate = fairMean - totalSpreadPct;
+  const spotApr = DATA.current_apr;
+  const discountToSpot = netRate - spotApr;
+
+  // Update display
+  document.getElementById('spotApr').textContent = spotApr.toFixed(2) + '%';
+  document.getElementById('fairRate').textContent = fairMean.toFixed(2) + '%';
+  document.getElementById('netRate').textContent = netRate.toFixed(2) + '%';
+
+  const discountEl = document.getElementById('discount');
+  const discountSubEl = document.getElementById('discountSub');
+  const absBp = Math.abs(discountToSpot * 100).toFixed(0);
+  if (discountToSpot < -0.001) {
+    discountEl.textContent = '−' + absBp + ' bp';
+    discountEl.className = 'value color-orange';
+    discountSubEl.textContent = 'Below current spot rate';
+  } else if (discountToSpot > 0.001) {
+    discountEl.textContent = '+' + absBp + ' bp';
+    discountEl.className = 'value color-green';
+    discountSubEl.textContent = 'Above current spot rate';
+  } else {
+    discountEl.textContent = '0 bp';
+    discountEl.className = 'value color-muted';
+    discountSubEl.textContent = 'At par with spot';
+  }
+
+  // Rate bars
+  // Normalize bars to a fixed 5% scale for consistent visual comparison
+  const maxRate = 5.0;
+  document.getElementById('barSpot').textContent = spotApr.toFixed(2) + '%';
+  document.getElementById('barFair').textContent = fairMean.toFixed(2) + '%';
+  document.getElementById('barNet').textContent = netRate.toFixed(2) + '%';
+  document.getElementById('barSpotFill').style.width = (spotApr / maxRate * 100) + '%';
+  document.getElementById('barFairFill').style.width = (fairMean / maxRate * 100) + '%';
+  document.getElementById('barNetFill').style.width = (Math.max(0, netRate) / maxRate * 100) + '%';
+
+  // Confidence
+  document.getElementById('confP5').textContent = fairP5.toFixed(3) + '%';
+  document.getElementById('confP25').textContent = fairP25.toFixed(3) + '%';
+  document.getElementById('confP50').textContent = fairP50.toFixed(3) + '%';
+  document.getElementById('confP75').textContent = fairP75.toFixed(3) + '%';
+  document.getElementById('confP95').textContent = fairP95.toFixed(3) + '%';
+
+  // Forward info — only show when start date is genuinely in the future
+  const fwdInfo = document.getElementById('forwardInfo');
+  const nowDate = new Date();
+  nowDate.setHours(0,0,0,0);
+  const daysFromNow = daysBetween(nowDate, startDate);
+  const isForwardStart = daysFromNow > 0;
+  if (isForwardStart && dayOffset > 0) {
+    fwdInfo.style.display = 'block';
+    document.getElementById('fwdDays').textContent = daysFromNow + ' days from now';
+    document.getElementById('fwdStartApr').textContent =
+      (DATA.mean_apr[Math.min(clampedStart, DATA.mean_apr.length - 1)]).toFixed(3) + '%';
+    document.getElementById('fwdEndApr').textContent =
+      (DATA.mean_apr[Math.min(clampedEnd, DATA.mean_apr.length - 1)]).toFixed(3) + '%';
+  } else {
+    fwdInfo.style.display = 'none';
+  }
+}
+
+// Event listeners
+document.getElementById('startDate').addEventListener('change', compute);
+document.getElementById('tenorPreset').addEventListener('change', function() {
+  document.getElementById('customTenorField').style.display =
+    this.value === 'custom' ? 'block' : 'none';
+  compute();
+});
+document.getElementById('customTenor').addEventListener('input', compute);
+document.getElementById('spread').addEventListener('input', compute);
+document.getElementById('margin').addEventListener('input', compute);
+
+loadData();
+</script>
+</body>
+</html>
