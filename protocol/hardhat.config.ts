@@ -9,6 +9,16 @@ const config: HardhatUserConfig = {
       accounts: process.env.DEPLOYER_KEY ? [process.env.DEPLOYER_KEY] : [],
       chainId: 11155111,
     },
+    holesky: {
+      url: process.env.HOLESKY_RPC_URL || "https://ethereum-holesky-rpc.publicnode.com",
+      accounts: process.env.DEPLOYER_KEY ? [process.env.DEPLOYER_KEY] : [],
+      chainId: 17000,
+    },
+    hoodi: {
+      url: process.env.HOODI_RPC_URL || "https://rpc.hoodi.ethpandaops.io",
+      accounts: process.env.DEPLOYER_KEY ? [process.env.DEPLOYER_KEY] : [],
+      chainId: 560048,
+    },
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_API_KEY || "",

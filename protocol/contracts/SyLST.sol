@@ -63,28 +63,26 @@ contract SyLST is ISyLST, ERC1155, ERC1155Supply, AccessControl {
     /**
      * @inheritdoc ISyLST
      * @dev Reverts if tokenId is already registered to prevent accidental overwrite.
+     *      fixedRateE18 is no longer stored here; rates are tracked per-deposit in the vault.
      */
     function registerSeries(
         uint256 tokenId,
-        uint256 maturityTimestamp,
-        uint256 fixedRateE18
+        uint256 maturityTimestamp
     ) external override onlyRole(VAULT_ROLE) {
         require(
             _seriesMeta[tokenId].maturityTimestamp == 0,
             "SyLST: series already registered"
         );
         require(maturityTimestamp > block.timestamp, "SyLST: maturity in the past");
-        require(fixedRateE18 > 0, "SyLST: zero fixed rate");
 
         _seriesMeta[tokenId] = SeriesMeta({
             maturityTimestamp: maturityTimestamp,
-            fixedRateE18: fixedRateE18,
             claimPerTokenE18: 0,
             settled: false
         });
         _registeredTokenIds.push(tokenId);
 
-        emit SeriesRegistered(tokenId, bytes32(tokenId), maturityTimestamp, fixedRateE18);
+        emit SeriesRegistered(tokenId, bytes32(tokenId), maturityTimestamp);
     }
 
     /**

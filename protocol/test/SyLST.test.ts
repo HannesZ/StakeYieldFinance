@@ -16,13 +16,12 @@ describe("SyLST", () => {
       const { vault, syLST } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const rate = ethers.parseEther("0.025");
-      const seriesId = await createSeries(vault, "REG1", ONE_YEAR, rate);
+      const seriesId = await createSeries(vault, "REG1", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       const meta = await syLST.seriesMeta(tokenId);
       expect(meta.maturityTimestamp).to.be.gt(0n);
-      expect(meta.fixedRateE18).to.equal(rate);
+      // fixedRateE18 no longer stored in SyLST (tracked per-deposit in vault)
       expect(meta.settled).to.equal(false);
       expect(meta.claimPerTokenE18).to.equal(0n);
     });
@@ -32,8 +31,9 @@ describe("SyLST", () => {
       const { vault, syLST } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      await createSeries(vault, "RALL1", ONE_YEAR, ethers.parseEther("0.02"));
-      await createSeries(vault, "RALL2", ONE_YEAR + 1000, ethers.parseEther("0.03"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      await createSeries(vault, "RALL1", ONE_YEAR);
+      await createSeries(vault, "RALL2", ONE_YEAR + 1000);
 
       const ids = await syLST.allTokenIds();
       expect(ids.length).to.equal(2);
@@ -45,10 +45,8 @@ describe("SyLST", () => {
 
       const tokenId = 999n;
       const maturity = BigInt(Math.floor(Date.now() / 1000) + 90 * 24 * 3600);
-      const rate = ethers.parseEther("0.025");
-
       await expect(
-        syLST.connect(user1).registerSeries(tokenId, maturity, rate)
+        syLST.connect(user1).registerSeries(tokenId, maturity)
       ).to.be.revertedWithCustomError(syLST, "AccessControlUnauthorizedAccount");
     });
 
@@ -57,7 +55,8 @@ describe("SyLST", () => {
       const { vault, syLST, admin } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "RDUP1", ONE_YEAR, ethers.parseEther("0.025"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId = await createSeries(vault, "RDUP1", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       // Trying to register again with same label (same tokenId) would be caught by vault
@@ -68,7 +67,7 @@ describe("SyLST", () => {
       // In tests, typically only vault has this role
       // We verify the vault correctly prevents duplicate series
       await expect(
-        vault.connect(admin).createSeries("RDUP1", Number(maturity), ethers.parseEther("0.025"))
+        vault.connect(admin).createSeries("RDUP1", Number(maturity))
       ).to.be.revertedWith("Vault: series already exists");
     });
   });
@@ -80,7 +79,8 @@ describe("SyLST", () => {
       const { vault, syLST, wstETH, user1 } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "MINT1", ONE_YEAR, ethers.parseEther("0.025"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId = await createSeries(vault, "MINT1", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       const depositAmt = ethers.parseEther("7");
@@ -98,7 +98,8 @@ describe("SyLST", () => {
       const { vault, syLST, wstETH, user1, user2 } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "MINTSUP", ONE_YEAR, ethers.parseEther("0.025"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId = await createSeries(vault, "MINTSUP", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       const amt1 = ethers.parseEther("3");
@@ -127,7 +128,8 @@ describe("SyLST", () => {
       const { vault, syLST, user1 } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "MINTNV", ONE_YEAR, ethers.parseEther("0.025"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId = await createSeries(vault, "MINTNV", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       await expect(
@@ -140,7 +142,8 @@ describe("SyLST", () => {
       const { vault, syLST, wstETH, admin } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "MINTZERO", ONE_YEAR, ethers.parseEther("0.025"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId = await createSeries(vault, "MINTZERO", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       // Zero deposit to zero address would be caught by vault's zero-deposit check first
@@ -165,8 +168,10 @@ describe("SyLST", () => {
       const d = await loadFixture(deploy);
       const { vault, wstETH, user1 } = d;
 
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "BURN1", ONE_YEAR, ethers.parseEther("0.025"));
+      const seriesId = await createSeries(vault, "BURN1", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       const depositAmt = ethers.parseEther("10");
@@ -231,8 +236,10 @@ describe("SyLST", () => {
       const d = await loadFixture(deploy);
       const { vault, wstETH, user1 } = d;
 
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "XFER1", ONE_YEAR, ethers.parseEther("0.025"));
+      const seriesId = await createSeries(vault, "XFER1", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       const depositAmt = ethers.parseEther("10");
@@ -314,8 +321,9 @@ describe("SyLST", () => {
       const { vault, syLST, wstETH, user1, user2 } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId1 = await createSeries(vault, "BATCH1", ONE_YEAR, ethers.parseEther("0.025"));
-      const seriesId2 = await createSeries(vault, "BATCH2", ONE_YEAR + 1, ethers.parseEther("0.03"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId1 = await createSeries(vault, "BATCH1", ONE_YEAR);
+      const seriesId2 = await createSeries(vault, "BATCH2", ONE_YEAR + 1);
 
       // Fund reserve so kappa stays above critical after first deposit creates liabilities
       await fundReserve(d, ethers.parseEther("100"));
@@ -349,8 +357,10 @@ describe("SyLST", () => {
       const d = await loadFixture(deploy);
       const { vault, wstETH, user1 } = d;
 
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "SETT1", ONE_YEAR, ethers.parseEther("0.025"));
+      const seriesId = await createSeries(vault, "SETT1", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       const depositAmt = ethers.parseEther("10");
@@ -378,7 +388,8 @@ describe("SyLST", () => {
       const { vault, syLST } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "NSETT", ONE_YEAR, ethers.parseEther("0.025"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId = await createSeries(vault, "NSETT", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       expect(await syLST.isSettled(tokenId)).to.equal(false);
@@ -416,7 +427,8 @@ describe("SyLST", () => {
       const { vault, syLST } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "IMMAT", ONE_YEAR, ethers.parseEther("0.025"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId = await createSeries(vault, "IMMAT", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       expect(await syLST.isMature(tokenId)).to.equal(false);
@@ -427,7 +439,8 @@ describe("SyLST", () => {
       const { vault, syLST, wstETH, user1, keeper } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId = await createSeries(vault, "EVT1", ONE_YEAR, ethers.parseEther("0.025"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId = await createSeries(vault, "EVT1", ONE_YEAR);
       const tokenId = BigInt(seriesId);
 
       const depositAmt = ethers.parseEther("10");
@@ -482,8 +495,9 @@ describe("SyLST", () => {
       const { vault, syLST, wstETH, user1 } = d;
 
       const ONE_YEAR = Number(SECONDS_PER_YEAR);
-      const seriesId1 = await createSeries(vault, "BOB1", ONE_YEAR, ethers.parseEther("0.025"));
-      const seriesId2 = await createSeries(vault, "BOB2", ONE_YEAR + 1, ethers.parseEther("0.03"));
+      await vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+      const seriesId1 = await createSeries(vault, "BOB1", ONE_YEAR);
+      const seriesId2 = await createSeries(vault, "BOB2", ONE_YEAR + 1);
 
       const amt1 = ethers.parseEther("3");
       const amt2 = ethers.parseEther("7");

@@ -35,13 +35,11 @@ interface ISyLST is IERC1155 {
      * @param tokenId           ERC-1155 tokenId (uint256(seriesId)).
      * @param seriesId          Original bytes32 series identifier.
      * @param maturityTimestamp Unix timestamp of series maturity.
-     * @param fixedRateE18      Annualised fixed rate, 1e18-scaled.
      */
     event SeriesRegistered(
         uint256 indexed tokenId,
         bytes32 indexed seriesId,
-        uint256 maturityTimestamp,
-        uint256 fixedRateE18
+        uint256 maturityTimestamp
     );
 
     /**
@@ -56,13 +54,11 @@ interface ISyLST is IERC1155 {
     /**
      * @notice Per-series metadata stored on the token contract.
      * @param maturityTimestamp Unix timestamp when the series matures.
-     * @param fixedRateE18      Annualised fixed rate (1e18 = 100%).
      * @param claimPerTokenE18  wstETH per syLST at redemption (set at settlement, 0 before).
      * @param settled           True once claimPerToken is finalised.
      */
     struct SeriesMeta {
         uint256 maturityTimestamp;
-        uint256 fixedRateE18;
         uint256 claimPerTokenE18; // set at series settlement
         bool settled;
     }
@@ -75,12 +71,10 @@ interface ISyLST is IERC1155 {
      *      Reverts if tokenId is already registered.
      * @param tokenId           uint256(seriesId)
      * @param maturityTimestamp Unix maturity timestamp.
-     * @param fixedRateE18      Annualised fixed rate, 1e18-scaled.
      */
     function registerSeries(
         uint256 tokenId,
-        uint256 maturityTimestamp,
-        uint256 fixedRateE18
+        uint256 maturityTimestamp
     ) external;
 
     /**

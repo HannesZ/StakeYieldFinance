@@ -10,13 +10,16 @@
     "size": "hardhat compile && hardhat size-contracts"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "@nomicfoundation/hardhat-chai-matchers": "^2.0.0",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "@openzeppelin/contracts": "^5.0.2",
     "@types/node": "^20.0.0",
     "hardhat": "^2.22.0",
     "solhint": "^5.0.0",
     "ts-node": "^10.9.0",
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
   }
 }

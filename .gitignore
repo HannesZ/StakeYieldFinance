@@ -61,3 +61,6 @@ data/history_daily_backfill.csv
 data/history.xlsx
 .env
 protocol/.env
+
+# Study sessions (personal notes)
+study-sessions/

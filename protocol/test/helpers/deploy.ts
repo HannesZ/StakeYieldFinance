@@ -181,13 +181,12 @@ export async function deploy(): Promise<DeployResult> {
 export async function createSeries(
   vault: StableYieldVault,
   label: string,
-  maturityOffsetSec: number | bigint,
-  fixedRateE18: bigint
+  maturityOffsetSec: number | bigint
 ): Promise<string> {
   const now = (await ethers.provider.getBlock("latest"))!.timestamp;
   const maturity = BigInt(now) + BigInt(maturityOffsetSec as number);
 
-  const tx = await vault.createSeries(label, maturity, fixedRateE18);
+  const tx = await vault.createSeries(label, maturity);
   await tx.wait();
 
   return ethers.keccak256(ethers.toUtf8Bytes(label));

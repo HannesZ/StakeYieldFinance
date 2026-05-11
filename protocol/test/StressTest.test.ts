@@ -153,8 +153,9 @@ async function standardFixture() {
   const d = await deploy();
 
   const ONE_YEAR = Number(SECONDS_PER_YEAR);
-  const fixedRate = ethers.parseEther("0.025"); // 2.5%
-  const seriesId = await createSeries(d.vault, "2027Q1", ONE_YEAR, fixedRate);
+  // Set stakingAPR=2.75% so computeFixedRate()≈2.5% with 25bp base spread
+  await d.vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+  const seriesId = await createSeries(d.vault, "2027Q1", ONE_YEAR);
 
   // 10 users deposit 100 wstETH each → ~1025 wstETH liability
   // Need reserve > κ_critical(0.5) × liability → >512 wstETH to allow all deposits
@@ -173,15 +174,16 @@ async function standardFixture() {
     await d.vault.connect(depositor).deposit(seriesId, depositAmount);
   }
 
-  return { ...d, seriesId, fixedRate, depositors, depositAmount, ONE_YEAR };
+  return { ...d, seriesId, depositors, depositAmount, ONE_YEAR };
 }
 
 async function smallReserveFixture() {
   const d = await deploy();
 
   const ONE_YEAR = Number(SECONDS_PER_YEAR);
-  const fixedRate = ethers.parseEther("0.025");
-  const seriesId = await createSeries(d.vault, "2027Q1", ONE_YEAR, fixedRate);
+  // Set stakingAPR=2.75% so computeFixedRate()≈2.5% with 25bp base spread
+  await d.vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+  const seriesId = await createSeries(d.vault, "2027Q1", ONE_YEAR);
 
   // Small reserve — enough to accept deposits but stressed
   // 1000 wstETH notional → ~1025 liability → κ_critical needs reserve > 512
@@ -199,7 +201,7 @@ async function smallReserveFixture() {
     await d.vault.connect(depositor).deposit(seriesId, depositAmount);
   }
 
-  return { ...d, seriesId, fixedRate, depositors, depositAmount, ONE_YEAR };
+  return { ...d, seriesId, depositors, depositAmount, ONE_YEAR };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -388,15 +390,12 @@ describe("Stress Tests — Reserve Dynamics", function () {
       const ONE_YEAR = 365 * SECONDS_PER_DAY;
       const TWO_YEARS = 730 * SECONDS_PER_DAY;
 
-      const s6m = await createSeries(
-        d.vault, "2026Q4-6M", HALF_YEAR, ethers.parseEther("0.026")
-      );
-      const s1y = await createSeries(
-        d.vault, "2027Q1-1Y", ONE_YEAR, ethers.parseEther("0.025")
-      );
-      const s2y = await createSeries(
-        d.vault, "2028Q1-2Y", TWO_YEARS, ethers.parseEther("0.023")
-      );
+      // Set stakingAPR so computeFixedRate() gives a reasonable fixed rate
+      await d.vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+
+      const s6m = await createSeries(d.vault, "2026Q4-6M", HALF_YEAR);
+      const s1y = await createSeries(d.vault, "2027Q1-1Y", ONE_YEAR);
+      const s2y = await createSeries(d.vault, "2028Q1-2Y", TWO_YEARS);
 
       // Users deposit into each series
       const signers = await ethers.getSigners();

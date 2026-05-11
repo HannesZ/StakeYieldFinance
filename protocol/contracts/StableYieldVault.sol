@@ -134,6 +134,14 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
     /// @notice List of all created series identifiers (for enumeration).
     bytes32[] private _allSeriesIds;
 
+    /// @notice Current reference staking APR (1e18-scaled, e.g. 3.2% = 32000000000000000).
+    ///         Set by keeper via setStakingAPR(). Used to compute the offered fixed rate:
+    ///         fixedRate = stakingAPR - spread(kappa).
+    uint256 public stakingAPR;
+
+    /// @notice Per-deposit records: seriesId => depositor => DepositRecord[]
+    mapping(bytes32 => mapping(address => DepositRecord[])) private _deposits;
+
     // ─── Harvest State ──────────────────────────────────────────────────────────
 
     /// @notice Total wstETH escrowed across all active series.
@@ -200,20 +208,15 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
      *   seriesId = keccak256(abi.encodePacked(seriesLabel))
      *   e.g. keccak256("2026Q3") → 0xabc…
      *
-     * The fixed rate provided here is the BASE rate offered to depositors.
-     * The spread is added on top at deposit time and flows to the reserve.
-     * So effective obligations from the protocol's perspective are:
-     *   base rate → returned to depositors at maturity
-     *   spread    → accrues to reserve as safety buffer
+     * The fixed rate offered to depositors is computed dynamically at deposit time
+     * via computeFixedRate() = stakingAPR - spread(kappa).
      *
      * @param seriesLabel       Human-readable label (e.g. "2026Q3").
      * @param maturityTimestamp Unix maturity timestamp.
-     * @param fixedRateE18      Annualised base fixed rate, 1e18-scaled.
      */
     function createSeries(
         string calldata seriesLabel,
-        uint256 maturityTimestamp,
-        uint256 fixedRateE18
+        uint256 maturityTimestamp
     )
         external
         override
@@ -221,19 +224,18 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         returns (bytes32 seriesId)
     {
         require(maturityTimestamp > block.timestamp, "Vault: maturity in the past");
-        require(fixedRateE18 > 0 && fixedRateE18 < WAD, "Vault: invalid rate");
 
         seriesId = keccak256(abi.encodePacked(seriesLabel));
         require(_series[seriesId].maturity == 0, "Vault: series already exists");
 
         _series[seriesId] = Series({
-            maturity:       maturityTimestamp,
-            fixedRateE18:   fixedRateE18,
-            totalDeposited: 0,
-            totalClaims:    0,
-            totalSyLst:     0,
-            isOpen:         true,
-            isSettled:      false
+            maturity:         maturityTimestamp,
+            totalDeposited:   0,
+            totalClaims:      0,
+            totalSyLst:       0,
+            weightedRateSum:  0,
+            isOpen:           true,
+            isSettled:        false
         });
 
         _allSeriesIds.push(seriesId);
@@ -241,11 +243,10 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         // Register the series tokenId on the SyLST contract.
         ISyLST(syLST).registerSeries(
             uint256(seriesId),
-            maturityTimestamp,
-            fixedRateE18
+            maturityTimestamp
         );
 
-        emit SeriesCreated(seriesId, maturityTimestamp, fixedRateE18);
+        emit SeriesCreated(seriesId, maturityTimestamp);
     }
 
     /**
@@ -321,7 +322,8 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         // ── 4. Compute user's fixed-rate claim at maturity ──────────────────────
         // claim = principal · (1 + r_fixed · tenor)
         // r_fixed · tenor = fixedRateE18 · tenorFracE18 / WAD
-        uint256 fixedInterestE18 = (s.fixedRateE18 * tenorFracE18) / WAD;
+        uint256 currentFixedRate = computeFixedRate();
+        uint256 fixedInterestE18 = (currentFixedRate * tenorFracE18) / WAD;
         // claim_E18 = principal_E18 · (1 + fixedInterestRate_E18)
         // claim (in wstETH raw units) = wstEthAmount + wstEthAmount * fixedInterestE18 / WAD
         uint256 claimAtMaturity = wstEthAmount + (wstEthAmount * fixedInterestE18) / WAD;
@@ -342,10 +344,19 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         // The claimPerToken rate will be finalised at settlement.
         syLstMinted = wstEthAmount; // 1:1 mint
 
+        // ── 6b. Store per-deposit record ──────────────────────────────────────
+        _deposits[seriesId][msg.sender].push(DepositRecord({
+            wstEthAmount:     wstEthAmount,
+            fixedRateE18:     currentFixedRate,
+            depositTimestamp: block.timestamp,
+            claimAtMaturity:  claimAtMaturity
+        }));
+
         // ── 7. Update series accounting ─────────────────────────────────────────
-        s.totalDeposited += wstEthAmount;
-        s.totalClaims    += claimAtMaturity;
-        s.totalSyLst     += syLstMinted;
+        s.totalDeposited    += wstEthAmount;
+        s.totalClaims       += claimAtMaturity;
+        s.totalSyLst        += syLstMinted;
+        s.weightedRateSum   += wstEthAmount * currentFixedRate;
 
         // ── 8. Update escrow and liability tracking ─────────────────────────────
         totalEscrowed += wstEthAmount;
@@ -687,7 +698,8 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             uint256 tenorFracE18 = ((s.maturity > block.timestamp
                 ? s.maturity - block.timestamp
                 : 0) * WAD) / SECONDS_PER_YEAR;
-            uint256 interest = (s.fixedRateE18 * tenorFracE18) / WAD;
+            uint256 currentRate = computeFixedRate();
+            uint256 interest = (currentRate * tenorFracE18) / WAD;
             fixedClaim = syLstAmount + (syLstAmount * interest) / WAD;
         } else {
             fixedClaim = (syLstAmount * rate) / WAD;
@@ -746,11 +758,70 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             bytes32 sid = _allSeriesIds[i];
             Series storage s = _series[sid];
             if (!s.isSettled && s.totalDeposited > 0) {
-                weightedSum += s.totalDeposited * s.fixedRateE18;
+                weightedSum += s.weightedRateSum;
             }
         }
 
         blendedE18 = weightedSum / _totalEscrowed;
+    }
+
+
+    // New: Staking APR & Per-Deposit Query Functions
+
+    /**
+     * @notice Keeper sets the reference staking APR (from Lido data or observation).
+     * @dev fixedRate = stakingAPR - spread(kappa). APR must be < 100% (< WAD).
+     * @param _stakingAPR New staking APR (1e18-scaled, e.g. 3.2% = 32000000000000000).
+     */
+    function setStakingAPR(uint256 _stakingAPR) external onlyRole(KEEPER_ROLE) {
+        require(_stakingAPR < WAD, "Vault: APR too high");
+        stakingAPR = _stakingAPR;
+        emit StakingAPRUpdated(_stakingAPR);
+    }
+
+    /**
+     * @notice Compute the current model-derived fixed rate offered to depositors.
+     *         fixedRate = stakingAPR - spread(kappa), floored at 0.
+     * @return fixedRateE18 Current offered fixed rate (1e18-scaled).
+     */
+    function computeFixedRate() public view returns (uint256 fixedRateE18) {
+        uint256 spreadBps = ISpreadCalculator(spreadCalculator).currentSpread();
+        // 1 bp = 0.0001 = 1e14 in WAD-scaled
+        uint256 spreadE18 = spreadBps * 1e14;
+        if (stakingAPR > spreadE18) {
+            fixedRateE18 = stakingAPR - spreadE18;
+        } else {
+            fixedRateE18 = 0;
+        }
+    }
+
+    /**
+     * @notice Get all deposit records for a user in a series.
+     * @param seriesId Target series.
+     * @param user     Depositor address.
+     */
+    function getDeposits(bytes32 seriesId, address user)
+        external
+        view
+        returns (DepositRecord[] memory)
+    {
+        return _deposits[seriesId][user];
+    }
+
+    /**
+     * @notice Get total claim at maturity for a user in a series (sum of all deposits).
+     * @param seriesId Target series.
+     * @param user     Depositor address.
+     */
+    function getUserClaim(bytes32 seriesId, address user)
+        external
+        view
+        returns (uint256 totalClaim)
+    {
+        DepositRecord[] storage deps = _deposits[seriesId][user];
+        for (uint256 i; i < deps.length; i++) {
+            totalClaim += deps[i].claimAtMaturity;
+        }
     }
 
     // ─── Admin ─────────────────────────────────────────────────────────────────

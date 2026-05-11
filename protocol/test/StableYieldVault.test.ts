@@ -25,9 +25,12 @@ function computeExpectedClaim(
 async function vaultFixture() {
   const d = await deploy();
 
-  // Create a default 1-year series at 2.5% fixed
+  // Set stakingAPR = 2.75% so computeFixedRate() ≈ 2.5% (with 25bp spread)
+  await d.vault.connect(d.keeper).setStakingAPR(ethers.parseEther("0.0275"));
+
+  // Create a default 1-year series (rate computed dynamically at deposit time)
   const ONE_YEAR = Number(SECONDS_PER_YEAR);
-  const seriesId = await createSeries(d.vault, "2027Q1", ONE_YEAR, ethers.parseEther("0.025"));
+  const seriesId = await createSeries(d.vault, "2027Q1", ONE_YEAR);
 
   return { ...d, seriesId, ONE_YEAR };
 }
@@ -39,11 +42,10 @@ describe("StableYieldVault", () => {
     it("governance can create a series", async () => {
       const { vault, admin } = await loadFixture(deploy);
       const maturity = (await time.latest()) + 90 * 24 * 3600; // 90 days
-      const rate = ethers.parseEther("0.02"); // 2%
 
       const tx = await vault
         .connect(admin)
-        .createSeries("2027Q2", maturity, rate);
+        .createSeries("2027Q2", maturity);
       const receipt = await tx.wait();
 
       // SeriesCreated event should be emitted
@@ -61,10 +63,9 @@ describe("StableYieldVault", () => {
     it("non-governance cannot create a series", async () => {
       const { vault, user1 } = await loadFixture(deploy);
       const maturity = (await time.latest()) + 90 * 24 * 3600;
-      const rate = ethers.parseEther("0.02");
 
       await expect(
-        vault.connect(user1).createSeries("2027Q3", maturity, rate)
+        vault.connect(user1).createSeries("2027Q3", maturity)
       ).to.be.revertedWithCustomError(vault, "AccessControlUnauthorizedAccount");
     });
 
@@ -73,45 +74,64 @@ describe("StableYieldVault", () => {
       const pastMaturity = (await time.latest()) - 1;
 
       await expect(
-        vault.connect(admin).createSeries("PAST", pastMaturity, ethers.parseEther("0.02"))
+        vault.connect(admin).createSeries("PAST", pastMaturity)
       ).to.be.revertedWith("Vault: maturity in the past");
     });
 
-    it("reverts if fixed rate is zero", async () => {
-      const { vault, admin } = await loadFixture(deploy);
-      const maturity = (await time.latest()) + 90 * 24 * 3600;
-
-      await expect(
-        vault.connect(admin).createSeries("ZERO", maturity, 0n)
-      ).to.be.revertedWith("Vault: invalid rate");
+    it("computeFixedRate returns 0 when stakingAPR not set", async () => {
+      const { vault } = await loadFixture(deploy);
+      // Default stakingAPR=0, spread >= 0, so fixedRate = 0
+      const rate = await vault.computeFixedRate();
+      expect(rate).to.equal(0n);
     });
 
-    it("reverts if fixed rate >= WAD (100%)", async () => {
-      const { vault, admin } = await loadFixture(deploy);
-      const maturity = (await time.latest()) + 90 * 24 * 3600;
+    it("computeFixedRate returns correct value after setStakingAPR", async () => {
+      const { vault, keeper, spread } = await loadFixture(deploy);
+      // stakingAPR = 3.2%, spread ≈ 25bp = 0.25%
+      await vault.connect(keeper).setStakingAPR(ethers.parseEther("0.032"));
+      const fixedRate = await vault.computeFixedRate();
+      const spreadBps = await spread.currentSpread();
+      const expectedRate = ethers.parseEther("0.032") - spreadBps * 10n ** 14n;
+      expect(fixedRate).to.equal(expectedRate);
+    });
 
+    it("setStakingAPR requires KEEPER_ROLE", async () => {
+      const { vault, user1 } = await loadFixture(deploy);
       await expect(
-        vault.connect(admin).createSeries("TOOBIG", maturity, WAD)
-      ).to.be.revertedWith("Vault: invalid rate");
+        vault.connect(user1).setStakingAPR(ethers.parseEther("0.032"))
+      ).to.be.revertedWithCustomError(vault, "AccessControlUnauthorizedAccount");
+    });
+
+    it("setStakingAPR reverts if APR >= 100%", async () => {
+      const { vault, keeper } = await loadFixture(deploy);
+      await expect(
+        vault.connect(keeper).setStakingAPR(WAD)
+      ).to.be.revertedWith("Vault: APR too high");
+    });
+
+    it("computeFixedRate returns 0 when spread >= stakingAPR", async () => {
+      const { vault, keeper } = await loadFixture(deploy);
+      // Set stakingAPR very low (1bp) so spread > stakingAPR
+      await vault.connect(keeper).setStakingAPR(1n);
+      const fixedRate = await vault.computeFixedRate();
+      expect(fixedRate).to.equal(0n);
     });
 
     it("reverts on duplicate series label", async () => {
       const { vault, admin } = await loadFixture(deploy);
       const maturity = (await time.latest()) + 90 * 24 * 3600;
-      const rate = ethers.parseEther("0.02");
 
-      await vault.connect(admin).createSeries("DUPL", maturity, rate);
+      await vault.connect(admin).createSeries("DUPL", maturity);
       await expect(
-        vault.connect(admin).createSeries("DUPL", maturity + 1000, rate)
+        vault.connect(admin).createSeries("DUPL", maturity + 1000)
       ).to.be.revertedWith("Vault: series already exists");
     });
 
     it("series is registered on SyLST contract", async () => {
       const { vault, syLST, admin } = await loadFixture(deploy);
       const maturity = (await time.latest()) + 90 * 24 * 3600;
-      const rate = ethers.parseEther("0.02");
 
-      const tx = await vault.connect(admin).createSeries("SYLT1", maturity, rate);
+      const tx = await vault.connect(admin).createSeries("SYLT1", maturity);
       const receipt = await tx.wait();
 
       // Derive seriesId the same way the contract does
@@ -120,7 +140,7 @@ describe("StableYieldVault", () => {
 
       const meta = await syLST.seriesMeta(tokenId);
       expect(meta.maturityTimestamp).to.equal(maturity);
-      expect(meta.fixedRateE18).to.equal(rate);
+      // fixedRateE18 is no longer stored in SyLST (tracked per-deposit in vault)
       expect(meta.settled).to.equal(false);
     });
   });
@@ -307,6 +327,67 @@ describe("StableYieldVault", () => {
   });
 
   // ────────────────────────────────────────────────────────────────────────────
+  describe("Per-Deposit Rate Tracking", () => {
+    it("stores deposit record with correct rate and claim", async () => {
+      const { vault, wstETH, user1, seriesId } = await loadFixture(vaultFixture);
+
+      const depositAmount = ethers.parseEther("10");
+      await wstETH.mint(user1.address, depositAmount);
+      await wstETH.connect(user1).approve(await vault.getAddress(), depositAmount);
+      await vault.connect(user1).deposit(seriesId, depositAmount);
+
+      const records = await vault.getDeposits(seriesId, user1.address);
+      expect(records).to.have.length(1);
+      expect(records[0].wstEthAmount).to.equal(depositAmount);
+      expect(records[0].fixedRateE18).to.be.gt(0n); // rate was set
+      expect(records[0].claimAtMaturity).to.be.gt(depositAmount);
+    });
+
+    it("multiple deposits from same user tracked separately", async () => {
+      const d = await loadFixture(vaultFixture);
+      const { vault, wstETH, user1, seriesId } = d;
+
+      const amt1 = ethers.parseEther("5");
+      const amt2 = ethers.parseEther("3");
+
+      // Fund reserve so kappa stays healthy after first deposit
+      await fundReserve(d, ethers.parseEther("100"));
+
+      await wstETH.mint(user1.address, amt1 + amt2);
+      await wstETH.connect(user1).approve(await vault.getAddress(), amt1 + amt2);
+      await vault.connect(user1).deposit(seriesId, amt1);
+      await vault.connect(user1).deposit(seriesId, amt2);
+
+      const records = await vault.getDeposits(seriesId, user1.address);
+      expect(records).to.have.length(2);
+      expect(records[0].wstEthAmount).to.equal(amt1);
+      expect(records[1].wstEthAmount).to.equal(amt2);
+    });
+
+    it("getUserClaim returns sum of all deposits claims", async () => {
+      const d = await loadFixture(vaultFixture);
+      const { vault, wstETH, user1, seriesId } = d;
+
+      const amt1 = ethers.parseEther("5");
+      const amt2 = ethers.parseEther("3");
+
+      // Fund reserve so kappa stays healthy after first deposit
+      await fundReserve(d, ethers.parseEther("100"));
+
+      await wstETH.mint(user1.address, amt1 + amt2);
+      await wstETH.connect(user1).approve(await vault.getAddress(), amt1 + amt2);
+      await vault.connect(user1).deposit(seriesId, amt1);
+      await vault.connect(user1).deposit(seriesId, amt2);
+
+      const records = await vault.getDeposits(seriesId, user1.address);
+      const totalClaim = records.reduce((sum, r) => sum + r.claimAtMaturity, 0n);
+      const userClaim = await vault.getUserClaim(seriesId, user1.address);
+      expect(userClaim).to.equal(totalClaim);
+      expect(userClaim).to.be.gt(amt1 + amt2); // includes fixed interest
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────
   describe("Redemption", () => {
     async function depositAndSettleFixture() {
       const d = await loadFixture(vaultFixture);
@@ -477,8 +558,8 @@ describe("StableYieldVault", () => {
       const { vault, admin } = await loadFixture(deploy);
 
       const maturity = (await time.latest()) + 90 * 24 * 3600;
-      await vault.connect(admin).createSeries("A", maturity, ethers.parseEther("0.02"));
-      await vault.connect(admin).createSeries("B", maturity + 1, ethers.parseEther("0.03"));
+      await vault.connect(admin).createSeries("A", maturity);
+      await vault.connect(admin).createSeries("B", maturity + 1);
 
       const ids = await vault.allSeriesIds();
       expect(ids).to.have.length(2);

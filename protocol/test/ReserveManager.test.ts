@@ -52,9 +52,7 @@ describe("ReserveManager", () => {
 
       // Use the vault deposit path (which calls depositReserve internally)
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "TEST1", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "TEST1", ONE_YEAR);
 
       const amount = ethers.parseEther("10");
       await wstETH.mint(user1.address, amount);
@@ -101,9 +99,7 @@ describe("ReserveManager", () => {
 
       // Add liability via vault deposit to get a meaningful kappa
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "FUNDED1", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "FUNDED1", ONE_YEAR);
 
       const depositAmt = ethers.parseEther("100"); // liability ≈ 102.5 wstETH
       await wstETH.mint(d.user1.address, depositAmt);
@@ -180,10 +176,12 @@ describe("ReserveManager", () => {
       const d = await loadFixture(deploy);
       const { vault, wstETH, user1 } = d;
 
+      // Set staking APR so computeFixedRate() returns > 0
+      // 3.5% staking APR - 0.25% base spread (at healthy κ) = 3.25% fixed
+      await vault.setStakingAPR(ethers.parseEther("0.035"));
+
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "LIAB1", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "LIAB1", ONE_YEAR);
 
       const before = await d.reserve.totalLiabilities();
 
@@ -201,9 +199,14 @@ describe("ReserveManager", () => {
       const d = await loadFixture(deploy);
       const { vault, wstETH, user1 } = d;
 
+      // 3.5% staking APR - 0.25% base spread = 3.25% fixed rate
+      await vault.setStakingAPR(ethers.parseEther("0.035"));
+
       const ONE_YEAR = 365 * 24 * 3600;
-      const fixedRate = ethers.parseEther("0.025"); // 2.5%
-      const seriesId = await createSeries(vault, "LIAB2", ONE_YEAR, fixedRate);
+      const seriesId = await createSeries(vault, "LIAB2", ONE_YEAR);
+
+      // Check the computed rate before depositing
+      const computedRate = await vault.computeFixedRate();
 
       const depositAmt = ethers.parseEther("10");
       await wstETH.mint(user1.address, depositAmt);
@@ -212,8 +215,13 @@ describe("ReserveManager", () => {
 
       const liability = await d.reserve.seriesLiability(seriesId);
 
-      // 10 wstETH at 2.5% for 1 year → liability ≈ 10.25 wstETH
-      expect(liability).to.be.closeTo(ethers.parseEther("10.25"), ethers.parseEther("0.01"));
+      // 10 wstETH at ~3.25% for 1 year → liability ≈ 10.325 wstETH
+      const expectedRate = Number(computedRate) / 1e18;
+      const expectedLiability = 10 * (1 + expectedRate);
+      expect(liability).to.be.closeTo(
+        ethers.parseEther(expectedLiability.toFixed(6)),
+        ethers.parseEther("0.01")
+      );
     });
 
     it("multiple deposits accumulate liability correctly", async () => {
@@ -223,10 +231,14 @@ describe("ReserveManager", () => {
       // Fund reserve so kappa stays above critical after first deposit
       await fundReserve(d, ethers.parseEther("100"));
 
+      // 3.5% staking APR - 0.25% base spread = 3.25% fixed rate
+      await vault.setStakingAPR(ethers.parseEther("0.035"));
+
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "LIAB3", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "LIAB3", ONE_YEAR);
+
+      const computedRate = await vault.computeFixedRate();
+      const rate = Number(computedRate) / 1e18;
 
       const amt1 = ethers.parseEther("10");
       const amt2 = ethers.parseEther("5");
@@ -244,8 +256,12 @@ describe("ReserveManager", () => {
       const liab2 = await d.reserve.seriesLiability(seriesId);
       expect(liab2).to.be.gt(liab1);
 
-      // Combined: 15 wstETH at 2.5% → ~15.375 wstETH
-      expect(liab2).to.be.closeTo(ethers.parseEther("15.375"), ethers.parseEther("0.05"));
+      // Combined: 15 wstETH at computed rate for 1 year
+      const expectedLiability = 15 * (1 + rate);
+      expect(liab2).to.be.closeTo(
+        ethers.parseEther(expectedLiability.toFixed(6)),
+        ethers.parseEther("0.05")
+      );
     });
 
     it("removeLiability clears series liability to 0", async () => {
@@ -256,9 +272,7 @@ describe("ReserveManager", () => {
       await fundReserve(d, ethers.parseEther("100"));
 
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "RMLIAB", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "RMLIAB", ONE_YEAR);
 
       const depositAmt = ethers.parseEther("10");
       await wstETH.mint(user1.address, depositAmt);
@@ -281,9 +295,7 @@ describe("ReserveManager", () => {
       await fundReserve(d, ethers.parseEther("100"));
 
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "TOTLIAB", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "TOTLIAB", ONE_YEAR);
 
       const depositAmt = ethers.parseEther("10");
       await wstETH.mint(user1.address, depositAmt);
@@ -316,9 +328,7 @@ describe("ReserveManager", () => {
       const { vault, reserve, wstETH, user1 } = d;
 
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "KAPPA1", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "KAPPA1", ONE_YEAR);
 
       // Deposit to create liabilities
       const depositAmt = ethers.parseEther("100");
@@ -343,9 +353,7 @@ describe("ReserveManager", () => {
       const { vault, reserve, wstETH, user1 } = d;
 
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "KAPPARISE", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "KAPPARISE", ONE_YEAR);
 
       const depositAmt = ethers.parseEther("100");
       await wstETH.mint(user1.address, depositAmt);
@@ -368,9 +376,7 @@ describe("ReserveManager", () => {
       const { vault, reserve, wstETH, user1, user2 } = d;
 
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "KAPPAFAL", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "KAPPAFAL", ONE_YEAR);
 
       // Fund reserve first
       await wstETH.mint(await reserve.getAddress(), ethers.parseEther("200"));
@@ -400,9 +406,7 @@ describe("ReserveManager", () => {
       const { vault, reserve, wstETH, user1, admin } = d;
 
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "SURPLUS1", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "SURPLUS1", ONE_YEAR);
 
       const depositAmt = ethers.parseEther("100");
       await wstETH.mint(user1.address, depositAmt);
@@ -447,9 +451,7 @@ describe("ReserveManager", () => {
       const { vault, reserve, wstETH, user1, keeper } = d;
 
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "NOSURP", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "NOSURP", ONE_YEAR);
 
       const depositAmt = ethers.parseEther("100");
       await wstETH.mint(user1.address, depositAmt);
@@ -502,9 +504,7 @@ describe("ReserveManager", () => {
       const { vault, reserve, wstETH, user1 } = d;
 
       const ONE_YEAR = 365 * 24 * 3600;
-      const seriesId = await createSeries(
-        vault, "EMERG1", ONE_YEAR, ethers.parseEther("0.025")
-      );
+      const seriesId = await createSeries(vault, "EMERG1", ONE_YEAR);
 
       // Deposit to create significant liability
       const depositAmt = ethers.parseEther("100");

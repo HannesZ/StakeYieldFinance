@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-05-11T15:52:12.654074+00:00",
+  "series": "2026Q4",
+  "maturity": "2026-12-31",
+  "term_days": 233,
+  "calibration_window_days": 90,
+  "calibration_data_range": "2026-01-30 \u2192 2026-04-14",
+  "current_active_eth": 38867642.0,
+  "spot_apr": 0.02796,
+  "spot_apr_pct": 2.796,
+  "model_projected_apr": 0.027033,
+  "model_projected_apr_pct": 2.7033,
+  "model_projected_apr_e18": "27032505364074316",
+  "projection_percentiles": {
+    "p5": 0.026828,
+    "p25": 0.026949,
+    "p50": 0.027033,
+    "p75": 0.027108,
+    "p95": 0.027231,
+    "mean": 0.02703,
+    "queue_clear_day": 21,
+    "term_days": 233,
+    "n_sims": 2000
+  },
+  "calibrated_params": {
+    "drift_per_day": 31866.0,
+    "vol_per_sqrt_day": 50648.0,
+    "jump_lambda": 0.0,
+    "jump_mu": 0,
+    "jump_sigma": 0.0,
+    "exit_drift": 35058.0,
+    "exit_vol": 37037.0,
+    "net_daily_eth": 31866.0,
+    "window_days": 90
+  },
+  "n_sims": 2000
+}

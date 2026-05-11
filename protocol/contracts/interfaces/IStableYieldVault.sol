@@ -28,9 +28,14 @@ interface IStableYieldVault {
      * @notice Emitted when a new quarterly maturity series is created.
      * @param seriesId      Unique identifier for the series (keccak256 of label, e.g. "2026Q3")
      * @param maturity      Unix timestamp when the series matures
-     * @param fixedRateE18  Annualised fixed rate, scaled by 1e18 (e.g. 2.5% = 0.025e18)
      */
-    event SeriesCreated(bytes32 indexed seriesId, uint256 maturity, uint256 fixedRateE18);
+    event SeriesCreated(bytes32 indexed seriesId, uint256 maturity);
+
+    /**
+     * @notice Emitted when the reference staking APR is updated by the keeper.
+     * @param newAPR New staking APR (1e18-scaled, e.g. 3.2% = 32000000000000000).
+     */
+    event StakingAPRUpdated(uint256 newAPR);
 
     /**
      * @notice Emitted when a series is closed (no new deposits accepted).
@@ -80,21 +85,35 @@ interface IStableYieldVault {
     /**
      * @notice Full metadata for a series.
      * @param maturity          Unix timestamp of maturity.
-     * @param fixedRateE18      Annualised fixed rate (1e18 = 100%).
      * @param totalDeposited    Total wstETH deposited into this series.
      * @param totalClaims       Total wstETH owed at maturity (Σ principal · (1 + r · T)).
      * @param totalSyLst        Total syLST tokens in circulation for this series.
+     * @param weightedRateSum   Running sum of (depositAmount × fixedRate) for blended-rate harvesting.
      * @param isOpen            Whether new deposits are accepted.
      * @param isSettled         Whether the series has been settled at maturity.
      */
     struct Series {
         uint256 maturity;
-        uint256 fixedRateE18;
         uint256 totalDeposited;
         uint256 totalClaims;
         uint256 totalSyLst;
+        uint256 weightedRateSum;
         bool isOpen;
         bool isSettled;
+    }
+
+    /**
+     * @notice Per-deposit record for per-depositor rate tracking.
+     * @param wstEthAmount     Principal deposited.
+     * @param fixedRateE18     Rate locked at deposit time (1e18-scaled).
+     * @param depositTimestamp When deposited (unix seconds).
+     * @param claimAtMaturity  wstETH owed to this depositor at maturity.
+     */
+    struct DepositRecord {
+        uint256 wstEthAmount;
+        uint256 fixedRateE18;
+        uint256 depositTimestamp;
+        uint256 claimAtMaturity;
     }
 
     // ─── Governance ────────────────────────────────────────────────────────────
@@ -103,15 +122,15 @@ interface IStableYieldVault {
      * @notice Creates a new quarterly maturity series.
      * @dev Only callable by GOVERNANCE_ROLE. The maturity must be in the future and
      *      standardised to a quarterly boundary (enforced off-chain by convention).
+     *      The fixed rate offered to depositors is computed dynamically via computeFixedRate()
+     *      at deposit time — not fixed at series creation.
      * @param seriesLabel       Human-readable label, e.g. "2026Q3". Used to derive seriesId.
      * @param maturityTimestamp Unix timestamp for maturity (must be > block.timestamp).
-     * @param fixedRateE18      Annualised fixed rate scaled by 1e18.
      * @return seriesId         keccak256 hash of seriesLabel used as ERC-1155 tokenId.
      */
     function createSeries(
         string calldata seriesLabel,
-        uint256 maturityTimestamp,
-        uint256 fixedRateE18
+        uint256 maturityTimestamp
     ) external returns (bytes32 seriesId);
 
     /**
@@ -194,6 +213,41 @@ interface IStableYieldVault {
     function currentSpreadBps(bytes32 seriesId) external view returns (uint256 spreadBps);
 
     /**
+     * @notice Compute the current model-derived fixed rate offered to depositors.
+     *         fixedRate = stakingAPR - spread(κ), floored at 0.
+     * @return fixedRateE18 Current offered fixed rate (1e18-scaled).
+     */
+    function computeFixedRate() external view returns (uint256 fixedRateE18);
+
+    /**
+     * @notice Returns the current reference staking APR set by the keeper.
+     * @return Staking APR (1e18-scaled).
+     */
+    function stakingAPR() external view returns (uint256);
+
+    /**
+     * @notice Get all deposit records for a user in a series.
+     * @param seriesId Target series.
+     * @param user     Depositor address.
+     * @return Array of DepositRecord structs.
+     */
+    function getDeposits(bytes32 seriesId, address user)
+        external
+        view
+        returns (DepositRecord[] memory);
+
+    /**
+     * @notice Get total claim at maturity for a user across all their deposits in a series.
+     * @param seriesId Target series.
+     * @param user     Depositor address.
+     * @return totalClaim Sum of claimAtMaturity across all deposit records.
+     */
+    function getUserClaim(bytes32 seriesId, address user)
+        external
+        view
+        returns (uint256 totalClaim);
+
+    /**
      * @notice Returns the address of the wstETH token.
      */
     function wstETH() external view returns (address);
@@ -207,4 +261,13 @@ interface IStableYieldVault {
      * @notice Returns the address of the ReserveManager.
      */
     function reserveManager() external view returns (address);
+
+    // ─── Governance / Keeper Actions ──────────────────────────────────────────
+
+    /**
+     * @notice Set the reference staking APR used to compute the offered fixed rate.
+     * @dev Only callable by KEEPER_ROLE. APR must be < 100% (< WAD).
+     * @param _stakingAPR New staking APR (1e18-scaled, e.g. 3.2% = 32000000000000000).
+     */
+    function setStakingAPR(uint256 _stakingAPR) external;
 }
