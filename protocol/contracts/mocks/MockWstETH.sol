@@ -8,18 +8,18 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
  * @notice Test mock for Lido's wstETH token.
  *
  * @dev Simulates wstETH with an adjustable stEthPerToken() exchange rate.
- *      The initial rate is 1.15e27 (representing ~15% appreciation since genesis).
+ *      The initial rate is 1.15e18 (representing ~15% appreciation since genesis).
  *      Rate can be adjusted via setStEthPerToken() to simulate yield accrual in tests.
  *
- * Note: Lido's actual stEthPerToken() is ray-scaled (1e27), not WAD-scaled (1e18).
+ * Note: Lido's stEthPerToken() is WAD-scaled (1e18).
  * This mock matches that convention so the vault's harvest math works correctly.
  */
 contract MockWstETH is ERC20 {
     // ─── State ──────────────────────────────────────────────────────────────────
 
-    /// @notice stETH per wstETH exchange rate, ray-scaled (1e27).
-    ///         Starts at 1.15e27 representing ~15% staking appreciation since genesis.
-    uint256 private _stEthPerToken = 1.15e27;
+    /// @notice stETH per wstETH exchange rate, WAD-scaled (1e18).
+    ///         Starts at 1.15e18 representing ~15% staking appreciation since genesis.
+    uint256 private _stEthPerToken = 1.15e18;
 
     // ─── Constructor ────────────────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ contract MockWstETH is ERC20 {
 
     /**
      * @notice Returns the amount of stETH backing one wstETH.
-     * @return stETH per wstETH, ray-scaled (1e27). Increases monotonically in production.
+     * @return stETH per wstETH, WAD-scaled (1e18). Increases monotonically in production.
      */
     function stEthPerToken() external view returns (uint256) {
         return _stEthPerToken;
@@ -49,7 +49,7 @@ contract MockWstETH is ERC20 {
      * @return Amount of wstETH (1e18-scaled).
      */
     function getWstETHByStETH(uint256 _stETHAmount) external view returns (uint256) {
-        return (_stETHAmount * 1e27) / _stEthPerToken;
+        return (_stETHAmount * 1e18) / _stEthPerToken;
     }
 
     // ─── Mint ────────────────────────────────────────────────────────────────────

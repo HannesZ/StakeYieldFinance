@@ -10,7 +10,7 @@ import {
 import type { DeployResult } from "./helpers/deploy";
 
 const WAD = ethers.parseEther("1");
-const RAY = 10n ** 27n;
+const RAY = 10n ** 18n; // WAD-scaled
 const SECONDS_PER_DAY = 86400;
 const SECONDS_PER_YEAR = 365n * 24n * 3600n;
 const BPS = 10000n;
@@ -186,9 +186,9 @@ async function smallReserveFixture() {
   const seriesId = await createSeries(d.vault, "2027Q1", ONE_YEAR);
 
   // Small reserve — enough to accept deposits but stressed
-  // 1000 wstETH notional → ~1025 liability → κ_critical needs reserve > 512
-  // Seed at 550 so κ starts just above critical and degrades under stress
-  await fundReserve(d, ethers.parseEther("550"));
+  // 10 × 100 wstETH notional → ~1025 liability → κ_emergency(1.05) needs reserve > 1076
+  // Seed at 1100 so κ starts barely above emergency and degrades under 1% stress
+  await fundReserve(d, ethers.parseEther("1100"));
 
   const signers = await ethers.getSigners();
   const depositAmount = ethers.parseEther("100");
@@ -253,8 +253,8 @@ describe("Stress Tests — Reserve Dynamics", function () {
           expect(wstBalance).to.be.gt(ethers.parseEther("98"));
           // Verify stETH value increased (the real return):
           const currentRate = await f.wstETH.stEthPerToken();
-          const stEthValue = (wstBalance * currentRate) / (10n ** 27n);
-          const originalStEth = (ethers.parseEther("100") * (115n * 10n ** 25n)) / (10n ** 27n);
+          const stEthValue = (wstBalance * currentRate) / (10n ** 18n);
+          const originalStEth = (ethers.parseEther("100") * (115n * 10n ** 16n)) / (10n ** 18n);
           expect(stEthValue).to.be.gt(originalStEth);
         }
       }
@@ -330,9 +330,9 @@ describe("Stress Tests — Reserve Dynamics", function () {
       console.log(`  Final reserve: ${formatWstETH(finalReserve)} wstETH`);
       console.log(`  Final κ: ${formatRatio(finalKappa)}`);
 
-      // Reserve started at 550, with float=1.0% < fixed=2.5% the deficit
+      // Reserve started at 1100, with float=1.0% < fixed=2.5% the deficit
       // should drain reserve over the year. If harvest is working, reserve declines.
-      console.log(`  Reserve delta: ${formatWstETH(finalReserve - ethers.parseEther("550"))} wstETH`);
+      console.log(`  Reserve delta: ${formatWstETH(finalReserve - ethers.parseEther("1100"))} wstETH`);
 
       // Spread should be elevated given stressed κ
       let finalSpread: bigint;
@@ -471,8 +471,8 @@ describe("Stress Tests — Reserve Dynamics", function () {
           const wstBal = await d.wstETH.balanceOf(depositor.address);
           // stETH-denominated: wstETH returned < 50 but stETH value > original
           const currentRate = await d.wstETH.stEthPerToken();
-          const stEthValue = (wstBal * currentRate) / (10n ** 27n);
-          const originalStEth = (ethers.parseEther("50") * (115n * 10n ** 25n)) / (10n ** 27n);
+          const stEthValue = (wstBal * currentRate) / (10n ** 18n);
+          const originalStEth = (ethers.parseEther("50") * (115n * 10n ** 16n)) / (10n ** 18n);
           expect(stEthValue).to.be.gt(originalStEth);
           console.log(
             `  6M user redeemed: ${formatWstETH(wstBal)} wstETH (stETH value: ${formatWstETH(stEthValue)})`

@@ -225,13 +225,13 @@ export async function simulateYield(
   elapsedDays: number
 ): Promise<void> {
   const currentRate = await wstETH.stEthPerToken();
-  const RAY = 10n ** 27n;
+  const WAD = 10n ** 18n;
   const annualBps = BigInt(annualRateBps);
   const days = BigInt(elapsedDays);
 
-  // yieldFraction (ray-scaled) = annualRateBps * days / (10000 * 365) * RAY
-  const yieldFraction = (annualBps * days * RAY) / (10000n * 365n);
-  const newRate = currentRate + (currentRate * yieldFraction) / RAY;
+  // yieldFraction (WAD-scaled) = annualRateBps * days / (10000 * 365) * WAD
+  const yieldFraction = (annualBps * days * WAD) / (10000n * 365n);
+  const newRate = currentRate + (currentRate * yieldFraction) / WAD;
   await wstETH.setStEthPerToken(newRate);
 }
 
@@ -239,7 +239,7 @@ export async function simulateYield(
  * Directly set the wstETH exchange rate.
  *
  * @param wstETH    MockWstETH contract.
- * @param newRate   New stETH-per-wstETH rate, ray-scaled (1e27).
+ * @param newRate   New stETH-per-wstETH rate, WAD-scaled (1e18).
  */
 export async function setWstEthRate(
   wstETH: MockWstETH,

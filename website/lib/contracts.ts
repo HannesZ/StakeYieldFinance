@@ -9,11 +9,11 @@
 
 export const ADDRESSES = {
   hoodi: {
-    stableYieldVault: "0x3eF5D4fA2253A617b9dF95134F0A4f9c0f35aaDc" as `0x${string}`,
-    syLST: "0xD6531AF63137bC832D12f0e0B8101d10560d9D70" as `0x${string}`,
-    reserveManager: "0x5C346E26d2017010AaFA87BC0d087Fa66D7B3B4C" as `0x${string}`,
-    spreadCalculator: "0x5B6dbD6D41Bf94b448dC7686Fdd5E397659f68Dd" as `0x${string}`,
-    syldToken: "0x8dff892034B5c0B023F63796EDA90Ab2733C97Fc" as `0x${string}`,
+    stableYieldVault: "0x221C3D504c8fC1d539ede6a2eEde7DcdB7855356" as `0x${string}`,
+    syLST: "0xE5ca9C109495A098eAf883E7Ba414Bf54C2E1a2c" as `0x${string}`,
+    reserveManager: "0xADf826DF9f5d260FA60202c6520f3ECB530a0a72" as `0x${string}`,
+    spreadCalculator: "0x883Af902FeBEd81fD03F93d1B0aDA6A53e3DeF1a" as `0x${string}`,
+    syldToken: "0xec9a36E563aE03D78851d5A44DE44D45e137413D" as `0x${string}`,
     wstETH: "0x7E99eE3C66636DE415D2d7C880938F2f40f94De4" as `0x${string}`,
   },
   mainnet: {

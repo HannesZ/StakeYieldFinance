@@ -5,9 +5,9 @@ import { deploy, createSeries, advanceTime, simulateYield, fundReserve } from ".
 import type { DeployResult } from "./helpers/deploy";
 
 const WAD = ethers.parseEther("1"); // 1e18
-const RAY = 10n ** 27n;
+const RAY = 10n ** 18n; // WAD-scaled, matching Lido stEthPerToken
 const SECONDS_PER_YEAR = 365n * 24n * 3600n;
-const INITIAL_RATE = 115n * 10n ** 25n; // 1.15e27 — MockWstETH starting rate
+const INITIAL_RATE = 115n * 10n ** 16n; // 1.15e18 — MockWstETH starting rate (WAD-scaled)
 
 // Helper: compute the expected stETH claim at maturity
 function computeExpectedClaimStEth(
@@ -22,7 +22,7 @@ function computeExpectedClaimStEth(
 
 // Helper: convert wstETH to stETH at a given rate
 function wstEthToStEth(wstEthAmount: bigint, rate: bigint = INITIAL_RATE): bigint {
-  return (wstEthAmount * rate) / RAY;
+  return (wstEthAmount * rate) / RAY /* WAD */;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

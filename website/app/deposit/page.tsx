@@ -30,7 +30,7 @@ export default function DepositPage() {
     query: { enabled: !!address },
   });
 
-  // Read stEthPerToken for conversion (RAY-scaled, 1e27)
+  // Read stEthPerToken for conversion (WAD-scaled, 1e18)
   const { data: stEthPerToken } = useReadContract({
     address: addresses.wstETH,
     abi: WSTETH_ABI,
@@ -38,7 +38,7 @@ export default function DepositPage() {
   });
 
   // Compute stETH value and expected payout in stETH
-  const stEthPerTokenNum = stEthPerToken ? Number(stEthPerToken) / 1e27 : 1;
+  const stEthPerTokenNum = stEthPerToken ? Number(stEthPerToken) / 1e18 : 1;
   const stEthValue = parsedAmount * stEthPerTokenNum;
   const expectedPayoutStEth = stEthValue * (1 + (effectiveRate / 100) * tenor);
   const yieldAmountStEth = expectedPayoutStEth - stEthValue;

@@ -37,7 +37,7 @@ import {ISpreadCalculator} from "./interfaces/ISpreadCalculator.sol";
  *      b. Mints syLST[seriesId] proportional to the user's share of the series.
  *         syLST minted = X (1:1 with wstETH deposited, for simplicity of accounting).
  *      c. Snapshots stETH/wstETH rate and records the claim in stETH:
- *         stEthValue = X · stEthPerToken / RAY
+ *         stEthValue = X · stEthPerToken / WAD
  *         claim = stEthValue · (1 + r · T)     [stETH denomination]
  *      d. Records the spread obligation to reserve:
  *         spreadObligation = X · (spread/10000) · T  [flows to reserve as surplus]
@@ -74,7 +74,7 @@ import {ISpreadCalculator} from "./interfaces/ISpreadCalculator.sol";
  *
  * Snapshotting the stETH-per-wstETH ratio at each harvest lets us compute the
  * implicit floating yield earned by the escrowed wstETH without transferring tokens:
- *   floatGain_stETH = totalEscrowed · (currentRate − lastRate) / RAY
+ *   floatGain_stETH = totalEscrowed · (currentRate − lastRate) / WAD
  *
  * In practice, the "yield" is realised as wstETH appreciation; the surplus
  * is computed in stETH (the natural denomination for staking yield) and then
@@ -100,8 +100,8 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
     /// @dev 1e18 scaling factor for fixed-point arithmetic.
     uint256 private constant WAD = 1e18;
 
-    /// @dev 1e27 ray-scaled factor (Lido convention for stEthPerToken).
-    uint256 private constant RAY = 1e27;
+    /// @dev Lido stEthPerToken uses WAD (1e18) (Lido convention for stEthPerToken).
+    // Note: Lido stEthPerToken() is WAD-scaled (1e18), not WAD-scaled (1e18).
 
     /// @dev Seconds in a standard 365-day year (simple interest basis).
     uint256 private constant SECONDS_PER_YEAR = 365 days;
@@ -152,7 +152,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
     /// @notice Total wstETH escrowed across all active series.
     uint256 public totalEscrowed;
 
-    /// @notice stETH-per-wstETH ratio at the last harvest (1e27-scaled, matching Lido).
+    /// @notice stETH-per-wstETH ratio at the last harvest (1e18-scaled (WAD), matching Lido).
     uint256 public lastHarvestRate;
 
     /// @notice Timestamp of the last yield harvest.
@@ -286,7 +286,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
      *  3. Read current dynamic spread from SpreadCalculator (function of κ).
      *  4. Snapshot stETH/wstETH rate, compute stETH value of deposit.
      *  5. Compute the user's fixed-rate claim at maturity in stETH:
-     *     stEthValue = wstEthAmount × stEthPerToken / RAY
+     *     stEthValue = wstEthAmount × stEthPerToken / WAD
      *     claim_stETH = stEthValue × (1 + r_fixed × T)
      *  5. Compute the spread obligation (reserved for protocol):
      *     spreadObligation = wstEthAmount · (spreadRate · T)
@@ -316,12 +316,21 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         require(!s.isSettled,                 "Vault: series settled");
         require(block.timestamp < s.maturity, "Vault: series matured");
 
+        // ── 0b. Solvency gate: reject deposits when reserve is critically low ──
+        //    If there are existing liabilities, κ must be >= κ_emergency.
+        //    When liabilities == 0, kappa() returns type(uint256).max — always passes.
+        {
+            uint256 _kappa = IReserveManager(reserveManager).kappa();
+            uint256 _kappaEmergency = IReserveManager(reserveManager).kappaEmergency();
+            require(_kappa >= _kappaEmergency, "Vault: reserve below emergency threshold");
+        }
+
         // ── 1. Pull wstETH from depositor ──────────────────────────────────────
         IERC20(wstETH).safeTransferFrom(msg.sender, address(this), wstEthAmount);
 
         // ── 2. Snapshot stETH/wstETH rate and compute stETH value ───────────────
-        uint256 currentRate = _wstEthOracle.stEthPerToken(); // ray-scaled
-        uint256 stEthValue = (wstEthAmount * currentRate) / RAY;
+        uint256 currentRate = _wstEthOracle.stEthPerToken(); // WAD-scaled
+        uint256 stEthValue = (wstEthAmount * currentRate) / WAD;
 
         // ── 3. Compute tenor in seconds and as a WAD fraction of a year ────────
         uint256 tenorSeconds = s.maturity - block.timestamp;
@@ -366,7 +375,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         totalStEthObligationBase += stEthValue;
 
         // Liability to ReserveManager: convert stETH claim to wstETH for κ.
-        uint256 liabilityWstEth = (s.totalClaimsStEth * RAY) / currentRate;
+        uint256 liabilityWstEth = (s.totalClaimsStEth * WAD) / currentRate;
         IReserveManager(reserveManager).updateLiability(seriesId, liabilityWstEth);
 
         // ── 10. Transfer spread income to reserve ───────────────────────────────
@@ -492,8 +501,8 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         // ── 1. Compute floating yield on escrowed wstETH (stETH terms) ────────
         // The real stETH gain: totalEscrowed wstETH × (currentRate − lastRate).
         // Both sides in stETH; no phantom wstETH creation.
-        uint256 rateIncrease  = currentRate - _lastRate; // ray-scaled
-        uint256 floatGainStEth = (totalEscrowed * rateIncrease) / RAY;
+        uint256 rateIncrease  = currentRate - _lastRate; // WAD-scaled
+        uint256 floatGainStEth = (totalEscrowed * rateIncrease) / WAD;
 
         // ── 2. Compute fixed-rate obligation since last harvest (stETH terms) ───
         uint256 dt = block.timestamp - lastHarvestTimestamp;
@@ -513,7 +522,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         if (floatGainStEth >= fixedObligationStEth) {
             uint256 surplusStEth = floatGainStEth - fixedObligationStEth;
             // Convert stETH surplus to wstETH: wstETH = stETH × RAY / currentRate
-            uint256 surplusWstEth = (surplusStEth * RAY) / currentRate;
+            uint256 surplusWstEth = (surplusStEth * WAD) / currentRate;
             if (surplusWstEth > 0 && surplusWstEth <= totalEscrowed) {
                 IERC20(wstETH).safeTransfer(reserveManager, surplusWstEth);
                 IReserveManager(reserveManager).depositReserve(surplusWstEth);
@@ -522,7 +531,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             }
         } else {
             uint256 deficitStEth = fixedObligationStEth - floatGainStEth;
-            uint256 deficitWstEth = (deficitStEth * RAY) / currentRate;
+            uint256 deficitWstEth = (deficitStEth * WAD) / currentRate;
             if (deficitWstEth > 0) {
                 IReserveManager(reserveManager).withdrawReserve(deficitWstEth, address(this));
                 totalEscrowed += deficitWstEth;
@@ -591,7 +600,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
 
         // ── 1. Convert stETH claims to wstETH at current rate ─────────────────
         uint256 currentRate = _wstEthOracle.stEthPerToken();
-        uint256 totalClaimsWstEth = (totalClaimsStEth * RAY) / currentRate;
+        uint256 totalClaimsWstEth = (totalClaimsStEth * WAD) / currentRate;
 
         // ── 2. Check available wstETH in vault ──────────────────────────────────
         uint256 vaultBalance = IERC20(wstETH).balanceOf(address(this));
@@ -686,7 +695,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             } else {
                 uint256 stEthClaim = (syLstAmount * s.totalClaimsStEth) / s.totalSyLst;
                 uint256 currentRate = _wstEthOracle.stEthPerToken();
-                fixedClaim = (stEthClaim * RAY) / currentRate;
+                fixedClaim = (stEthClaim * WAD) / currentRate;
             }
         } else {
             // Settled: claimPerToken is already in wstETH/syLST.
@@ -833,7 +842,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
 
 /**
  * @dev Lido wstETH exposes stEthPerToken() returning the amount of stETH per 1 wstETH,
- *      scaled by 1e27 (ray-scaled, matching Lido's internal accounting).
+ *      scaled by 1e18 (WAD-scaled, matching Lido's internal accounting).
  *      This increases monotonically as stETH accrues staking rewards.
  *
  * Reference: https://docs.lido.fi/contracts/wst-eth
@@ -841,7 +850,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
 interface IWstETH {
     /**
      * @notice Get amount of stETH for one unit of wstETH.
-     * @return Amount of stETH per wstETH (1e27-scaled).
+     * @return Amount of stETH per wstETH (1e18-scaled, WAD).
      */
     function stEthPerToken() external view returns (uint256);
 
