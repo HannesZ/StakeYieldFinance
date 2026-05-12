@@ -17,19 +17,17 @@ export function SolvencyGauge({
   const targetAngle = (kappaTarget / 2) * 180;
   const emergencyAngle = (kappaEmergency / 2) * 180;
 
-  // Determine color
-  let color = "#4EC9B0"; // teal/mint — healthy
-  if (kappa < kappaTarget && kappa >= kappaEmergency * 2) color = "#f59e0b"; // amber — warning
-  if (kappa < kappaEmergency * 2) color = "#ef4444"; // red — danger
+  // Determine color based on solvency thresholds
+  let color = "#4EC9B0"; // teal/mint — healthy (κ ≥ target)
+  if (kappa < kappaTarget && kappa >= kappaEmergency) color = "#f59e0b"; // amber — stressed
+  if (kappa < kappaEmergency) color = "#ef4444"; // red — emergency
 
   const status =
     kappa >= kappaTarget
       ? "Healthy"
-      : kappa >= kappaEmergency * 2
+      : kappa >= kappaEmergency
         ? "Stressed"
-        : kappa > kappaEmergency
-          ? "Critical"
-          : "Emergency";
+        : "Emergency";
 
   return (
     <div className="flex flex-col items-center">
