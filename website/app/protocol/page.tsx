@@ -47,6 +47,12 @@ export default function ProtocolPage() {
     functionName: "isEmergency",
   });
 
+  const { data: kappaEmergencyRaw } = useReadContract({
+    address: addresses.reserveManager,
+    abi: RESERVE_MANAGER_ABI,
+    functionName: "kappaEmergency",
+  });
+
   // Spread data
   const { data: currentSpread } = useReadContract({
     address: addresses.spreadCalculator,
@@ -75,13 +81,14 @@ export default function ProtocolPage() {
   // When liabilities are 0, kappa is effectively infinite — cap for display
   const kappa = kappaNum !== null && kappaNum > 100 ? null : kappaNum;
   const kappaTargetNum = kappaTarget !== undefined ? Number(formatEther(kappaTarget)) : 1.5;
+  const kappaEmergencyNum = kappaEmergencyRaw !== undefined ? Number(formatEther(kappaEmergencyRaw)) : 0.3;
   const spreadBps = currentSpread !== undefined ? Number(currentSpread) : null;
 
   // Build series table
   const seriesRows = [{
     id: "2026Q4",
     fixedRate: seriesInfo.fixedRate,
-    maturity: 1798761599, // 2026-12-31
+    maturity: seriesData ? Number(seriesData.maturity) : 1798761599,
     totalDeposited: seriesData ? Number(formatEther(seriesData.totalDeposited)) : 0,
     isOpen: seriesData?.isOpen ?? true,
   }];
@@ -153,7 +160,7 @@ export default function ProtocolPage() {
           <SolvencyGauge
             kappa={kappa ?? 0}
             kappaTarget={kappaTargetNum}
-            kappaEmergency={0.3}
+            kappaEmergency={kappaEmergencyNum}
           />
           <div className="mt-4 space-y-1 text-xs text-slate-400">
             <div className="flex justify-between">
@@ -162,7 +169,7 @@ export default function ProtocolPage() {
             </div>
             <div className="flex justify-between">
               <span>κ_emergency</span>
-              <span className="font-mono text-red-400">30%</span>
+              <span className="font-mono text-red-400">{(kappaEmergencyNum * 100).toFixed(0)}%</span>
             </div>
           </div>
         </div>

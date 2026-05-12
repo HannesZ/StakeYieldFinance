@@ -7,6 +7,9 @@ import { PositionCard, type Position } from "@/components/PositionCard";
 import { DEMO_SERIES, SERIES_2026Q4_ID, timeUntil } from "@/lib/utils";
 import { ADDRESSES, SY_LST_ABI, STABLE_YIELD_VAULT_ABI, ERC20_ABI } from "@/lib/contracts";
 import { useSeries } from "@/hooks/useSeries";
+import { useActivityHistory } from "@/hooks/useActivityHistory";
+import { ActivityHistory } from "@/components/ActivityHistory";
+import { useEffect, useState } from "react";
 
 const addresses = ADDRESSES.hoodi;
 const series = DEMO_SERIES[0]; // 2026Q4
@@ -42,6 +45,44 @@ export default function DashboardPage() {
     args: [SERIES_2026Q4_ID],
   });
 
+  // Read per-deposit records to compute accrued interest
+  const { data: deposits } = useReadContract({
+    address: addresses.stableYieldVault,
+    abi: STABLE_YIELD_VAULT_ABI,
+    functionName: "getDeposits",
+    args: address ? [SERIES_2026Q4_ID, address] : undefined,
+    query: { enabled: !!address },
+  });
+
+  // Live-updating accrued interest (recalculates every second)
+  const [accruedInterest, setAccruedInterest] = useState(0);
+  useEffect(() => {
+    if (!deposits || deposits.length === 0) {
+      setAccruedInterest(0);
+      return;
+    }
+    const tick = () => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const SECONDS_PER_YEAR = 365 * 86400;
+      let total = 0;
+      for (const d of deposits) {
+        const principal = Number(formatEther(d.wstEthAmount));
+        const rate = Number(d.fixedRateE18) / 1e18; // annualised rate as decimal
+        const elapsed = nowSec - Number(d.depositTimestamp);
+        if (elapsed > 0) {
+          total += principal * rate * elapsed / SECONDS_PER_YEAR;
+        }
+      }
+      setAccruedInterest(total);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [deposits]);
+
+  // Activity history from on-chain events
+  const { activities, isLoading: activitiesLoading } = useActivityHistory(address);
+
   const hasPosition = syLstBalance !== undefined && syLstBalance > BigInt(0);
   const remaining = timeUntil(series.maturity);
 
@@ -55,7 +96,7 @@ export default function DashboardPage() {
       balance: bal,
       fixedRate: seriesInfo.fixedRate,
       maturity: series.maturity,
-      accruedInterest: 0,
+      accruedInterest,
       claimAtMaturity: payout,
     };
   })() : null;
@@ -152,6 +193,12 @@ export default function DashboardPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Activity History */}
+      <div>
+        <h2 className="mb-4 text-xl font-semibold text-white">Activity History</h2>
+        <ActivityHistory activities={activities} isLoading={activitiesLoading} />
       </div>
     </div>
   );

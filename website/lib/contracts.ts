@@ -311,6 +311,13 @@ export const RESERVE_MANAGER_ABI = [
   },
   {
     type: "function",
+    name: "kappaEmergency",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
     name: "isEmergency",
     stateMutability: "view",
     inputs: [],

@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { DEMO_SERIES } from "@/lib/utils";
+import { DEMO_SERIES, SERIES_2026Q4_ID } from "@/lib/utils";
+import { ADDRESSES, STABLE_YIELD_VAULT_ABI } from "@/lib/contracts";
 import { useSeries } from "@/hooks/useSeries";
 import { useSpotAPR } from "@/hooks/useSpotAPR";
+import { useReadContract } from "wagmi";
+import { formatEther } from "viem";
 
 const STEPS = [
   {
@@ -26,9 +29,20 @@ const STEPS = [
   },
 ];
 
+const addresses = ADDRESSES.hoodi;
+
 export default function LandingPage() {
   const seriesInfo = useSeries();
   const { spotAPR } = useSpotAPR();
+
+  // Read actual on-chain totalDeposited for TVL display
+  const { data: seriesData } = useReadContract({
+    address: addresses.stableYieldVault,
+    abi: STABLE_YIELD_VAULT_ABI,
+    functionName: "getSeries",
+    args: [SERIES_2026Q4_ID],
+  });
+  const tvl = seriesData ? Number(formatEther(seriesData.totalDeposited)) : null;
 
   return (
     <div className="space-y-24">
@@ -121,8 +135,7 @@ export default function LandingPage() {
                 </div>
                 <div className="mb-4 text-xs text-slate-500">Fixed APR</div>
                 <div className="text-xs text-slate-400">
-                  Matures {matDate} · {s.totalDeposited.toLocaleString()} wstETH
-                  TVL
+                  Matures {matDate}{tvl !== null ? ` · ${tvl.toFixed(2)} wstETH TVL` : ""}
                 </div>
                 <Link
                   href="/deposit"
