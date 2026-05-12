@@ -36,12 +36,13 @@ import {ISpreadCalculator} from "./interfaces/ISpreadCalculator.sol";
  *         (Spread is the premium charged on the user; the spread portion flows to reserve)
  *      b. Mints syLST[seriesId] proportional to the user's share of the series.
  *         syLST minted = X (1:1 with wstETH deposited, for simplicity of accounting).
- *      c. Records the user's fixed-rate claim:
- *         claim = X · (1 + r · T)     [user sees this at maturity]
+ *      c. Snapshots stETH/wstETH rate and records the claim in stETH:
+ *         stEthValue = X · stEthPerToken / RAY
+ *         claim = stEthValue · (1 + r · T)     [stETH denomination]
  *      d. Records the spread obligation to reserve:
  *         spreadObligation = X · (spread/10000) · T  [flows to reserve as surplus]
- *      e. Updates liability in ReserveManager:
- *         liability added = X · (1 + r · T)
+ *      e. Updates liability in ReserveManager (converted to wstETH):
+ *         liability = totalClaimsStEth × RAY / currentRate
  *
  * 3. YIELD FLOW
  *    wstETH is a non-rebasing token; its value vs stETH grows as the Ethereum staking
@@ -73,12 +74,13 @@ import {ISpreadCalculator} from "./interfaces/ISpreadCalculator.sol";
  *
  * Snapshotting the stETH-per-wstETH ratio at each harvest lets us compute the
  * implicit floating yield earned by the escrowed wstETH without transferring tokens:
- *   floatGain_wstETH = totalEscrowed · (currentRate − lastRate) / lastRate
+ *   floatGain_stETH = totalEscrowed · (currentRate − lastRate) / RAY
  *
  * In practice, the "yield" is realised as wstETH appreciation; the surplus
- * wstETH is NOT minted — instead the vault signals to the reserve that a surplus
- * is available, and the vault may transfer a portion of the escrowed principal
- * to the reserve (or record a credit/debit). For simplicity, we track in wstETH units.
+ * is computed in stETH (the natural denomination for staking yield) and then
+ * converted to wstETH for physical transfer to/from the reserve.
+ * Claims at maturity are also denominated in stETH and converted to wstETH
+ * at settlement time, ensuring the protocol never promises phantom wstETH.
  *
  * ════════════════════════════════════════════════════════════════════════════════
  * FIXED-POINT MATH
@@ -97,6 +99,9 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
 
     /// @dev 1e18 scaling factor for fixed-point arithmetic.
     uint256 private constant WAD = 1e18;
+
+    /// @dev 1e27 ray-scaled factor (Lido convention for stEthPerToken).
+    uint256 private constant RAY = 1e27;
 
     /// @dev Seconds in a standard 365-day year (simple interest basis).
     uint256 private constant SECONDS_PER_YEAR = 365 days;
@@ -152,6 +157,10 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
 
     /// @notice Timestamp of the last yield harvest.
     uint256 public lastHarvestTimestamp;
+
+    /// @notice Sum of stETH values at deposit time for active (non-settled) series.
+    ///         Used in harvestYield() to compute the fixed obligation in stETH.
+    uint256 public totalStEthObligationBase;
 
     // ─── Per-Series Settlement ───────────────────────────────────────────────────
 
@@ -229,13 +238,14 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         require(_series[seriesId].maturity == 0, "Vault: series already exists");
 
         _series[seriesId] = Series({
-            maturity:         maturityTimestamp,
-            totalDeposited:   0,
-            totalClaims:      0,
-            totalSyLst:       0,
-            weightedRateSum:  0,
-            isOpen:           true,
-            isSettled:        false
+            maturity:            maturityTimestamp,
+            totalDeposited:      0,
+            totalClaimsStEth:    0,
+            totalSyLst:          0,
+            weightedRateSum:     0,
+            totalStEthDeposited: 0,
+            isOpen:              true,
+            isSettled:           false
         });
 
         _allSeriesIds.push(seriesId);
@@ -274,13 +284,14 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
      *  1. Validate series is open and not expired.
      *  2. Pull wstETH from caller.
      *  3. Read current dynamic spread from SpreadCalculator (function of κ).
-     *  4. Compute the user's fixed-rate claim at maturity (principal + interest).
-     *     claim = wstEthAmount · (1 + r_fixed · T)
-     *     where T = (maturity − now) / SECONDS_PER_YEAR
+     *  4. Snapshot stETH/wstETH rate, compute stETH value of deposit.
+     *  5. Compute the user's fixed-rate claim at maturity in stETH:
+     *     stEthValue = wstEthAmount × stEthPerToken / RAY
+     *     claim_stETH = stEthValue × (1 + r_fixed × T)
      *  5. Compute the spread obligation (reserved for protocol):
      *     spreadObligation = wstEthAmount · (spreadRate · T)
      *     This is tracked as additional reserve income, not returned to the user.
-     *  6. Update series state (totalDeposited, totalClaims, totalSyLst).
+     *  6. Update series state (totalDeposited, totalClaimsStEth, totalSyLst).
      *  7. Update liability in ReserveManager = user claim (not spread — spread is surplus).
      *  8. Mint syLST 1:1 with wstEthAmount (each token represents 1 wstETH of principal).
      *  9. Update escrow tracker and emit event.
@@ -308,83 +319,66 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         // ── 1. Pull wstETH from depositor ──────────────────────────────────────
         IERC20(wstETH).safeTransferFrom(msg.sender, address(this), wstEthAmount);
 
-        // ── 2. Compute tenor in seconds and as a WAD fraction of a year ────────
+        // ── 2. Snapshot stETH/wstETH rate and compute stETH value ───────────────
+        uint256 currentRate = _wstEthOracle.stEthPerToken(); // ray-scaled
+        uint256 stEthValue = (wstEthAmount * currentRate) / RAY;
+
+        // ── 3. Compute tenor in seconds and as a WAD fraction of a year ────────
         uint256 tenorSeconds = s.maturity - block.timestamp;
-        // tenorFracE18 = tenor / SECONDS_PER_YEAR * 1e18
         uint256 tenorFracE18 = (tenorSeconds * WAD) / SECONDS_PER_YEAR;
 
-        // ── 3. Fetch dynamic spread (basis points) ──────────────────────────────
+        // ── 4. Fetch dynamic spread (basis points) ──────────────────────────────
         uint256 spreadBps = ISpreadCalculator(spreadCalculator).currentSpread();
-        // Convert spread from basis points to 1e18-scaled fraction.
-        // 100 bp = 1% = 0.01 = 1e16 in WAD
         uint256 spreadE18 = (spreadBps * WAD) / 10_000;
 
-        // ── 4. Compute user's fixed-rate claim at maturity ──────────────────────
-        // claim = principal · (1 + r_fixed · tenor)
-        // r_fixed · tenor = fixedRateE18 · tenorFracE18 / WAD
+        // ── 5. Compute user's fixed-rate claim at maturity (stETH-denominated) ──
+        // claim_stETH = stEthValue · (1 + r_fixed · tenor)
         uint256 currentFixedRate = computeFixedRate();
         uint256 fixedInterestE18 = (currentFixedRate * tenorFracE18) / WAD;
-        // claim_E18 = principal_E18 · (1 + fixedInterestRate_E18)
-        // claim (in wstETH raw units) = wstEthAmount + wstEthAmount * fixedInterestE18 / WAD
-        uint256 claimAtMaturity = wstEthAmount + (wstEthAmount * fixedInterestE18) / WAD;
+        uint256 claimAtMaturityStEth = stEthValue + (stEthValue * fixedInterestE18) / WAD;
 
-        // ── 5. Compute spread income routed to reserve ──────────────────────────
-        // spreadObligation = principal · spreadRate · tenor
-        // This is additional to the fixed rate — charged to the depositor implicitly
-        // as a higher effective fixed rate, but NOT included in their claim.
-        // (The user gets r_fixed; the protocol keeps the spread as reserve income.)
-        //
-        // Actuarial note: the spread is an insurance premium. It directly increases
-        // reserve income without increasing user obligations, so it improves κ.
+        // ── 6. Compute spread income routed to reserve (wstETH) ─────────────────
+        // Spread is an insurance premium charged on the wstETH deposit.
         uint256 spreadIncomeE18  = (spreadE18 * tenorFracE18) / WAD;
         uint256 spreadIncomeWstEth = (wstEthAmount * spreadIncomeE18) / WAD;
 
-        // ── 6. Mint syLST 1:1 with deposited wstETH ────────────────────────────
-        // Each syLST token represents 1 wstETH of deposited principal.
-        // The claimPerToken rate will be finalised at settlement.
+        // ── 7. Mint syLST 1:1 with deposited wstETH ────────────────────────────
         syLstMinted = wstEthAmount; // 1:1 mint
 
-        // ── 6b. Store per-deposit record ──────────────────────────────────────
+        // ── 7b. Store per-deposit record ────────────────────────────────────────
         _deposits[seriesId][msg.sender].push(DepositRecord({
-            wstEthAmount:     wstEthAmount,
-            fixedRateE18:     currentFixedRate,
-            depositTimestamp: block.timestamp,
-            claimAtMaturity:  claimAtMaturity
+            wstEthAmount:          wstEthAmount,
+            stEthValue:            stEthValue,
+            fixedRateE18:          currentFixedRate,
+            depositTimestamp:      block.timestamp,
+            claimAtMaturityStEth:  claimAtMaturityStEth
         }));
 
-        // ── 7. Update series accounting ─────────────────────────────────────────
-        s.totalDeposited    += wstEthAmount;
-        s.totalClaims       += claimAtMaturity;
-        s.totalSyLst        += syLstMinted;
-        s.weightedRateSum   += wstEthAmount * currentFixedRate;
+        // ── 8. Update series accounting (stETH-denominated) ─────────────────────
+        s.totalDeposited      += wstEthAmount;
+        s.totalClaimsStEth    += claimAtMaturityStEth;
+        s.totalSyLst          += syLstMinted;
+        s.weightedRateSum     += stEthValue * currentFixedRate;  // stETH-weighted
+        s.totalStEthDeposited += stEthValue;
 
-        // ── 8. Update escrow and liability tracking ─────────────────────────────
+        // ── 9. Update escrow and obligation tracking ────────────────────────────
         totalEscrowed += wstEthAmount;
+        totalStEthObligationBase += stEthValue;
 
-        // Liability = user's fixed-rate claim (what we owe at maturity).
-        // Spread income is NOT a liability — it is surplus income.
-        IReserveManager(reserveManager).updateLiability(seriesId, s.totalClaims);
+        // Liability to ReserveManager: convert stETH claim to wstETH for κ.
+        uint256 liabilityWstEth = (s.totalClaimsStEth * RAY) / currentRate;
+        IReserveManager(reserveManager).updateLiability(seriesId, liabilityWstEth);
 
-        // ── 9. Transfer spread income to reserve ────────────────────────────────
-        // The spread is immediately transferred to the reserve from the deposit.
-        // This means the user's effective deposit into escrow = wstEthAmount - spreadIncomeWstEth,
-        // but their claim is still on wstEthAmount · (1 + r_fixed · T).
-        //
-        // IMPORTANT: The reserve must ALWAYS be able to cover the deficit between
-        // floatYield and fixedClaim. The spread pre-funds part of that buffer.
+        // ── 10. Transfer spread income to reserve ───────────────────────────────
         if (spreadIncomeWstEth > 0) {
-            // Transfer spread to ReserveManager and notify.
             IERC20(wstETH).safeTransfer(reserveManager, spreadIncomeWstEth);
             IReserveManager(reserveManager).depositReserve(spreadIncomeWstEth);
-            // Net escrowed (used for yield tracking) is principal minus spread pre-payment.
-            // However, we account for it as fully escrowed to simplify yield attribution.
-            // The spread_income is a one-time credit; yield attribution is on totalEscrowed.
         }
 
-        // ── 10. Mint syLST to depositor ─────────────────────────────────────────
+        // ── 11. Mint syLST to depositor ─────────────────────────────────────────
         ISyLST(syLST).mint(msg.sender, uint256(seriesId), syLstMinted, "");
 
-        emit Deposited(seriesId, msg.sender, wstEthAmount, syLstMinted, claimAtMaturity);
+        emit Deposited(seriesId, msg.sender, wstEthAmount, syLstMinted, claimAtMaturityStEth);
     }
 
     /**
@@ -495,19 +489,14 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             return;
         }
 
-        // ── 1. Compute floating yield on escrowed wstETH ────────────────────────
-        // The wstETH/stETH rate increased from lastRate to currentRate.
-        // Imputed float gain in wstETH = escrowed × (currentRate/lastRate − 1)
-        // = escrowed × (currentRate − lastRate) / lastRate
-        // Note: rates are in stETH-per-wstETH (1e27-scaled by Lido convention).
-        uint256 rateIncrease  = currentRate - _lastRate; // in stETH units (1e27)
-        // floatGainWstEth = totalEscrowed * rateIncrease / lastRate
-        // To avoid overflow: (totalEscrowed * rateIncrease) may be large.
-        // Safe because totalEscrowed < 2^128 and rateIncrease/lastRate < 1.
-        uint256 floatGainWstEth = (totalEscrowed * rateIncrease) / _lastRate;
+        // ── 1. Compute floating yield on escrowed wstETH (stETH terms) ────────
+        // The real stETH gain: totalEscrowed wstETH × (currentRate − lastRate).
+        // Both sides in stETH; no phantom wstETH creation.
+        uint256 rateIncrease  = currentRate - _lastRate; // ray-scaled
+        uint256 floatGainStEth = (totalEscrowed * rateIncrease) / RAY;
 
-        // ── 2. Compute fixed-rate obligation since last harvest ──────────────────
-        uint256 dt = block.timestamp - lastHarvestTimestamp; // seconds
+        // ── 2. Compute fixed-rate obligation since last harvest (stETH terms) ───
+        uint256 dt = block.timestamp - lastHarvestTimestamp;
         if (dt == 0) {
             lastHarvestRate      = currentRate;
             lastHarvestTimestamp = block.timestamp;
@@ -515,37 +504,36 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         }
         uint256 dtFracE18 = (dt * WAD) / SECONDS_PER_YEAR;
 
-        // Compute blended fixed rate = weighted average across active series.
+        // Blended rate now uses stETH-weighted average.
         uint256 blendedFixedRateE18 = _blendedFixedRate();
+        uint256 fixedObligationStEth = (totalStEthObligationBase * ((blendedFixedRateE18 * dtFracE18) / WAD)) / WAD;
 
-        // fixedObligation = totalEscrowed × blendedRate × dt/year
-        uint256 fixedObligationWstEth = (totalEscrowed * ((blendedFixedRateE18 * dtFracE18) / WAD)) / WAD;
-
-        // ── 3. Route net yield ──────────────────────────────────────────────────
+        // ── 3. Route net surplus/deficit (convert stETH → wstETH for transfer) ──
         uint256 toReserve;
-        if (floatGainWstEth >= fixedObligationWstEth) {
-            // Surplus: float yield exceeded fixed obligations → send to reserve.
-            toReserve = floatGainWstEth - fixedObligationWstEth;
-            if (toReserve > 0) {
-                // Physical transfer: wstETH flows from vault escrow to reserve.
-                // This means the vault's wstETH balance decreases; the deficit
-                // at maturity will be covered by reserve withdrawal during settlement.
-                IERC20(wstETH).safeTransfer(reserveManager, toReserve);
-                IReserveManager(reserveManager).depositReserve(toReserve);
-                totalEscrowed -= toReserve;
+        if (floatGainStEth >= fixedObligationStEth) {
+            uint256 surplusStEth = floatGainStEth - fixedObligationStEth;
+            // Convert stETH surplus to wstETH: wstETH = stETH × RAY / currentRate
+            uint256 surplusWstEth = (surplusStEth * RAY) / currentRate;
+            if (surplusWstEth > 0 && surplusWstEth <= totalEscrowed) {
+                IERC20(wstETH).safeTransfer(reserveManager, surplusWstEth);
+                IReserveManager(reserveManager).depositReserve(surplusWstEth);
+                totalEscrowed -= surplusWstEth;
+                toReserve = surplusWstEth;
             }
         } else {
-            // Deficit: float yield fell short of fixed obligations → draw from reserve.
-            uint256 deficit = fixedObligationWstEth - floatGainWstEth;
-            IReserveManager(reserveManager).withdrawReserve(deficit, address(this));
-            totalEscrowed += deficit;
+            uint256 deficitStEth = fixedObligationStEth - floatGainStEth;
+            uint256 deficitWstEth = (deficitStEth * RAY) / currentRate;
+            if (deficitWstEth > 0) {
+                IReserveManager(reserveManager).withdrawReserve(deficitWstEth, address(this));
+                totalEscrowed += deficitWstEth;
+            }
         }
 
         // ── 4. Update harvest state ──────────────────────────────────────────────
         lastHarvestRate      = currentRate;
         lastHarvestTimestamp = block.timestamp;
 
-        emit YieldHarvested(floatGainWstEth, toReserve);
+        emit YieldHarvested(floatGainStEth, toReserve);
     }
 
     /**
@@ -554,13 +542,12 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
      * @dev Settlement flow:
      *  1. Verify series is past maturity.
      *  2. Run a final harvest if needed.
-     *  3. Compute claimPerToken = totalClaims / totalSyLst (wstETH per syLST, 1e18-scaled).
-     *     claimPerToken = (totalClaims × 1e18) / totalSyLst
-     *  4. Compute total wstETH needed for redemption = totalClaims.
-     *  5. Check vault's wstETH balance covers totalClaims:
+     *  3. Convert totalClaimsStEth to wstETH at current rate.
+     *  4. Compute claimPerToken = totalClaimsWstEth / totalSyLst (wstETH/syLST, 1e18-scaled).
+     *  5. Check vault's wstETH balance covers totalClaimsWstEth:
      *     a. If surplus: excess flows to reserve.
      *     b. If deficit: draw from reserve.
-     *  6. Allocate settlement pool = totalClaims wstETH in the vault.
+     *  6. Allocate settlement pool = totalClaimsWstEth in the vault.
      *  7. Update liability to 0 in ReserveManager.
      *  8. Call ISyLST.settleSeries() to lock the claimPerToken on-chain.
      *  9. Mark series as settled.
@@ -591,7 +578,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             emit SeriesClosed(seriesId);
         }
 
-        uint256 totalClaims  = s.totalClaims;
+        uint256 totalClaimsStEth = s.totalClaimsStEth;
         uint256 totalSyLst_  = s.totalSyLst;
 
         if (totalSyLst_ == 0) {
@@ -602,18 +589,21 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             return;
         }
 
-        // ── 1. Check available wstETH in vault ──────────────────────────────────
+        // ── 1. Convert stETH claims to wstETH at current rate ─────────────────
+        uint256 currentRate = _wstEthOracle.stEthPerToken();
+        uint256 totalClaimsWstEth = (totalClaimsStEth * RAY) / currentRate;
+
+        // ── 2. Check available wstETH in vault ──────────────────────────────────
         uint256 vaultBalance = IERC20(wstETH).balanceOf(address(this));
 
         uint256 claimPerTokenE18;
         uint256 settledClaims;
 
-        if (vaultBalance >= totalClaims) {
+        if (vaultBalance >= totalClaimsWstEth) {
             // ── Surplus case ────────────────────────────────────────────────────
-            uint256 excess = vaultBalance - totalClaims;
-            settledClaims = totalClaims;
+            uint256 excess = vaultBalance - totalClaimsWstEth;
+            settledClaims = totalClaimsWstEth;
 
-            // Route excess wstETH to reserve.
             if (excess > 0) {
                 IERC20(wstETH).safeTransfer(reserveManager, excess);
                 IReserveManager(reserveManager).depositReserve(excess);
@@ -621,44 +611,41 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             }
         } else {
             // ── Deficit case: request reserve top-up ────────────────────────────
-            uint256 shortfall = totalClaims - vaultBalance;
-
-            // Attempt to withdraw shortfall from reserve.
-            // This may revert if reserve is below κ_emergency.
+            uint256 shortfall = totalClaimsWstEth - vaultBalance;
             IReserveManager(reserveManager).withdrawReserve(shortfall, address(this));
-
             vaultBalance = IERC20(wstETH).balanceOf(address(this));
 
-            if (vaultBalance >= totalClaims) {
-                settledClaims = totalClaims;
+            if (vaultBalance >= totalClaimsWstEth) {
+                settledClaims = totalClaimsWstEth;
             } else {
                 // ── Haircut: reserve insufficient ────────────────────────────────
-                // Apply proportional haircut: claimPerToken = vaultBalance / totalSyLst
-                // Depositors receive less than their full claim.
                 settledClaims = vaultBalance;
             }
         }
 
-        // ── 2. Compute claimPerToken (WAD-scaled) ────────────────────────────────
-        // claimPerToken = settledClaims * 1e18 / totalSyLst
-        // e.g. 1025 wstETH claims / 1000 syLST = 1.025e18 per token
+        // ── 3. Compute claimPerToken (WAD-scaled, in wstETH/syLST) ──────────────
         claimPerTokenE18 = (settledClaims * WAD) / totalSyLst_;
 
-        // ── 3. Allocate settlement pool ──────────────────────────────────────────
+        // ── 4. Allocate settlement pool ──────────────────────────────────────────
         _settlementPool[seriesId]   = settledClaims;
         _claimPerToken[seriesId]    = claimPerTokenE18;
 
-        // ── 4. Update tracking state ─────────────────────────────────────────────
+        // ── 5. Update tracking state ─────────────────────────────────────────────
         totalEscrowed = totalEscrowed > s.totalDeposited
             ? totalEscrowed - s.totalDeposited
             : 0;
 
+        // Decrease global stETH obligation base
+        totalStEthObligationBase = totalStEthObligationBase > s.totalStEthDeposited
+            ? totalStEthObligationBase - s.totalStEthDeposited
+            : 0;
+
         s.isSettled = true;
 
-        // ── 5. Remove liability from ReserveManager ───────────────────────────────
+        // ── 6. Remove liability from ReserveManager ───────────────────────────────
         IReserveManager(reserveManager).removeLiability(seriesId);
 
-        // ── 6. Finalise syLST settlement rate on-chain ────────────────────────────
+        // ── 7. Finalise syLST settlement rate on-chain ────────────────────────────
         ISyLST(syLST).settleSeries(uint256(seriesId), claimPerTokenE18);
     }
 
@@ -693,15 +680,16 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
 
         uint256 rate = _claimPerToken[seriesId];
         if (rate == 0) {
-            // Not yet settled: compute theoretical claim at current time.
-            // Use full tenor from deposit time (approximation: use series maturity).
-            uint256 tenorFracE18 = ((s.maturity > block.timestamp
-                ? s.maturity - block.timestamp
-                : 0) * WAD) / SECONDS_PER_YEAR;
-            uint256 currentRate = computeFixedRate();
-            uint256 interest = (currentRate * tenorFracE18) / WAD;
-            fixedClaim = syLstAmount + (syLstAmount * interest) / WAD;
+            // Not yet settled: compute stETH claim and convert to wstETH at current rate.
+            if (s.totalSyLst == 0) {
+                fixedClaim = syLstAmount; // no deposits yet, 1:1 fallback
+            } else {
+                uint256 stEthClaim = (syLstAmount * s.totalClaimsStEth) / s.totalSyLst;
+                uint256 currentRate = _wstEthOracle.stEthPerToken();
+                fixedClaim = (stEthClaim * RAY) / currentRate;
+            }
         } else {
+            // Settled: claimPerToken is already in wstETH/syLST.
             fixedClaim = (syLstAmount * rate) / WAD;
         }
     }
@@ -749,20 +737,20 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
      * Returns 0 if totalEscrowed == 0 (prevents division by zero in caller).
      */
     function _blendedFixedRate() internal view returns (uint256 blendedE18) {
-        uint256 _totalEscrowed = totalEscrowed;
-        if (_totalEscrowed == 0) return 0;
+        uint256 base = totalStEthObligationBase;
+        if (base == 0) return 0;
 
         uint256 weightedSum;
         uint256 len = _allSeriesIds.length;
         for (uint256 i; i < len; ++i) {
             bytes32 sid = _allSeriesIds[i];
             Series storage s = _series[sid];
-            if (!s.isSettled && s.totalDeposited > 0) {
+            if (!s.isSettled && s.totalStEthDeposited > 0) {
                 weightedSum += s.weightedRateSum;
             }
         }
 
-        blendedE18 = weightedSum / _totalEscrowed;
+        blendedE18 = weightedSum / base;
     }
 
 
@@ -820,7 +808,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
     {
         DepositRecord[] storage deps = _deposits[seriesId][user];
         for (uint256 i; i < deps.length; i++) {
-            totalClaim += deps[i].claimAtMaturity;
+            totalClaim += deps[i].claimAtMaturityStEth;
         }
     }
 

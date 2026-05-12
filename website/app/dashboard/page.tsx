@@ -5,7 +5,7 @@ import { formatEther } from "viem";
 import { ConnectButton } from "@/components/ConnectButton";
 import { PositionCard, type Position } from "@/components/PositionCard";
 import { DEMO_SERIES, SERIES_2026Q4_ID, timeUntil } from "@/lib/utils";
-import { ADDRESSES, SY_LST_ABI, STABLE_YIELD_VAULT_ABI, ERC20_ABI } from "@/lib/contracts";
+import { ADDRESSES, SY_LST_ABI, STABLE_YIELD_VAULT_ABI, ERC20_ABI, WSTETH_ABI } from "@/lib/contracts";
 import { useSeries } from "@/hooks/useSeries";
 import { useActivityHistory } from "@/hooks/useActivityHistory";
 import { ActivityHistory } from "@/components/ActivityHistory";
@@ -37,6 +37,13 @@ export default function DashboardPage() {
     query: { enabled: !!address },
   });
 
+  // Read current stEthPerToken rate for wstETH→stETH conversion display
+  const { data: stEthPerToken } = useReadContract({
+    address: addresses.wstETH,
+    abi: WSTETH_ABI,
+    functionName: "stEthPerToken",
+  });
+
   // Read series data from vault
   const { data: seriesData } = useReadContract({
     address: addresses.stableYieldVault,
@@ -54,7 +61,7 @@ export default function DashboardPage() {
     query: { enabled: !!address },
   });
 
-  // Live-updating accrued interest (recalculates every second)
+  // Live-updating accrued interest in stETH (recalculates every second)
   const [accruedInterest, setAccruedInterest] = useState(0);
   useEffect(() => {
     if (!deposits || deposits.length === 0) {
@@ -66,11 +73,12 @@ export default function DashboardPage() {
       const SECONDS_PER_YEAR = 365 * 86400;
       let total = 0;
       for (const d of deposits) {
-        const principal = Number(formatEther(d.wstEthAmount));
+        // stEthValue is the stETH value at deposit time; interest accrues on that
+        const stEthPrincipal = Number(formatEther(d.stEthValue));
         const rate = Number(d.fixedRateE18) / 1e18; // annualised rate as decimal
         const elapsed = nowSec - Number(d.depositTimestamp);
         if (elapsed > 0) {
-          total += principal * rate * elapsed / SECONDS_PER_YEAR;
+          total += stEthPrincipal * rate * elapsed / SECONDS_PER_YEAR;
         }
       }
       setAccruedInterest(total);
@@ -88,16 +96,21 @@ export default function DashboardPage() {
 
   const userPosition: Position | null = hasPosition ? (() => {
     const bal = Number(formatEther(syLstBalance!));
-    const tenorYears = (series.maturity - Math.floor(Date.now() / 1000)) / (365 * 86400);
-    const payout = bal * (1 + (seriesInfo.fixedRate / 100) * tenorYears);
+    // Sum stETH claims from deposits
+    let totalClaimStEth = 0;
+    if (deposits) {
+      for (const d of deposits) {
+        totalClaimStEth += Number(formatEther(d.claimAtMaturityStEth));
+      }
+    }
     return {
       seriesId: series.seriesId,
       seriesLabel: series.id,
       balance: bal,
       fixedRate: seriesInfo.fixedRate,
       maturity: series.maturity,
-      accruedInterest,
-      claimAtMaturity: payout,
+      accruedInterest, // now in stETH
+      claimAtMaturity: totalClaimStEth, // now in stETH
     };
   })() : null;
 

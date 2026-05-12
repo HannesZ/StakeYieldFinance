@@ -8,8 +8,8 @@ export interface Position {
   balance: number; // syLST balance
   fixedRate: number; // annualized %
   maturity: number; // unix timestamp
-  accruedInterest: number; // wstETH
-  claimAtMaturity: number; // wstETH total payout
+  accruedInterest: number; // stETH
+  claimAtMaturity: number; // stETH total payout
 }
 
 interface PositionCardProps {
@@ -53,13 +53,13 @@ export function PositionCard({ position, onRedeem }: PositionCardProps) {
         <div className="rounded-xl bg-white/[0.03] p-3">
           <div className="text-xs text-slate-400">Claim at Maturity</div>
           <div className="mt-0.5 font-mono text-sm font-medium text-white">
-            {position.claimAtMaturity.toFixed(4)} wstETH
+            {position.claimAtMaturity.toFixed(4)} stETH
           </div>
         </div>
         <div className="rounded-xl bg-white/[0.03] p-3">
           <div className="text-xs text-slate-400">Accrued Interest</div>
           <div className="mt-0.5 font-mono text-sm font-medium text-[#4EC9B0]">
-            +{position.accruedInterest.toFixed(4)} wstETH
+            +{position.accruedInterest.toFixed(4)} stETH
           </div>
         </div>
         <div className="rounded-xl bg-white/[0.03] p-3">

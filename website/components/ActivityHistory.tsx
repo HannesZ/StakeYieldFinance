@@ -54,6 +54,7 @@ export function ActivityHistory({ activities, isLoading }: ActivityHistoryProps)
             <th className="px-5 py-3 font-medium">Action</th>
             <th className="px-5 py-3 font-medium">Amount</th>
             <th className="px-5 py-3 font-medium hidden sm:table-cell">syLST</th>
+            <th className="px-5 py-3 font-medium hidden md:table-cell">Claim (stETH)</th>
             <th className="px-5 py-3 font-medium">Date</th>
             <th className="px-5 py-3 font-medium text-right">Tx</th>
           </tr>
@@ -85,6 +86,13 @@ export function ActivityHistory({ activities, isLoading }: ActivityHistoryProps)
               {/* syLST amount */}
               <td className="px-5 py-3.5 font-mono text-slate-300 hidden sm:table-cell">
                 {a.syLstAmount.toFixed(4)}
+              </td>
+
+              {/* Claim at maturity (stETH) */}
+              <td className="px-5 py-3.5 font-mono text-slate-300 hidden md:table-cell">
+                {a.type === "deposit" && a.claimAtMaturityStEth
+                  ? `${a.claimAtMaturityStEth.toFixed(4)} stETH`
+                  : "—"}
               </td>
 
               {/* Date */}

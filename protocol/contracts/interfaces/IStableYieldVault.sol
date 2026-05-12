@@ -15,9 +15,11 @@ pragma solidity ^0.8.20;
  * floating and fixed flows into (or out of) the ReserveManager.
  *
  * Fixed-rate payoff for a deposit of X wstETH at rate r_fixed for tenor T (years):
- *   Claim at maturity = X · (1 + r_fixed · T)    [simple interest, 365-day basis]
+ *   stEthValue = X · stEthPerToken()              [snapshot stETH value at deposit]
+ *   Claim at maturity = stEthValue · (1 + r_fixed · T)   [in stETH, simple interest]
+ *   wstETH out = Claim / stEthPerToken()           [converted at current rate on redemption]
  *
- * The gap is settled at harvest / maturity:
+ * The gap is settled at harvest / maturity (both sides in stETH):
  *   If r_float > r_fixed → surplus → reserve
  *   If r_float < r_fixed → deficit → drawn from reserve
  */
@@ -45,18 +47,18 @@ interface IStableYieldVault {
 
     /**
      * @notice Emitted on every wstETH deposit.
-     * @param seriesId       The target series.
-     * @param depositor      Address that deposited wstETH.
-     * @param wstEthAmount   Amount of wstETH deposited.
-     * @param syLstMinted    Amount of syLST (ERC-1155 tokenId = seriesId) minted.
-     * @param claimAtMaturity Fixed-rate wstETH amount redeemable at maturity.
+     * @param seriesId              The target series.
+     * @param depositor             Address that deposited wstETH.
+     * @param wstEthAmount          Amount of wstETH deposited.
+     * @param syLstMinted           Amount of syLST (ERC-1155 tokenId = seriesId) minted.
+     * @param claimAtMaturityStEth  Fixed-rate stETH amount redeemable at maturity.
      */
     event Deposited(
         bytes32 indexed seriesId,
         address indexed depositor,
         uint256 wstEthAmount,
         uint256 syLstMinted,
-        uint256 claimAtMaturity
+        uint256 claimAtMaturityStEth
     );
 
     /**
@@ -84,36 +86,40 @@ interface IStableYieldVault {
 
     /**
      * @notice Full metadata for a series.
-     * @param maturity          Unix timestamp of maturity.
-     * @param totalDeposited    Total wstETH deposited into this series.
-     * @param totalClaims       Total wstETH owed at maturity (Σ principal · (1 + r · T)).
-     * @param totalSyLst        Total syLST tokens in circulation for this series.
-     * @param weightedRateSum   Running sum of (depositAmount × fixedRate) for blended-rate harvesting.
-     * @param isOpen            Whether new deposits are accepted.
-     * @param isSettled         Whether the series has been settled at maturity.
+     * @param maturity            Unix timestamp of maturity.
+     * @param totalDeposited      Total wstETH deposited into this series.
+     * @param totalClaimsStEth    Total stETH owed at maturity (Σ stEthValue · (1 + r · T)).
+     * @param totalSyLst          Total syLST tokens in circulation for this series.
+     * @param weightedRateSum     Running sum of (stEthValue × fixedRate) for blended-rate harvesting.
+     * @param totalStEthDeposited Sum of stETH values at deposit time.
+     * @param isOpen              Whether new deposits are accepted.
+     * @param isSettled           Whether the series has been settled at maturity.
      */
     struct Series {
         uint256 maturity;
         uint256 totalDeposited;
-        uint256 totalClaims;
+        uint256 totalClaimsStEth;
         uint256 totalSyLst;
         uint256 weightedRateSum;
+        uint256 totalStEthDeposited;
         bool isOpen;
         bool isSettled;
     }
 
     /**
      * @notice Per-deposit record for per-depositor rate tracking.
-     * @param wstEthAmount     Principal deposited.
-     * @param fixedRateE18     Rate locked at deposit time (1e18-scaled).
-     * @param depositTimestamp When deposited (unix seconds).
-     * @param claimAtMaturity  wstETH owed to this depositor at maturity.
+     * @param wstEthAmount        Principal deposited (wstETH).
+     * @param stEthValue           stETH value at deposit = wstEthAmount × stEthPerToken / RAY.
+     * @param fixedRateE18         Rate locked at deposit time (1e18-scaled).
+     * @param depositTimestamp     When deposited (unix seconds).
+     * @param claimAtMaturityStEth stETH owed to this depositor at maturity.
      */
     struct DepositRecord {
         uint256 wstEthAmount;
+        uint256 stEthValue;
         uint256 fixedRateE18;
         uint256 depositTimestamp;
-        uint256 claimAtMaturity;
+        uint256 claimAtMaturityStEth;
     }
 
     // ─── Governance ────────────────────────────────────────────────────────────
@@ -195,11 +201,11 @@ interface IStableYieldVault {
     function getSeries(bytes32 seriesId) external view returns (Series memory);
 
     /**
-     * @notice Computes the wstETH claim a given syLST balance will yield at maturity,
-     *         using the current wstETH/stETH exchange rate for a floating-rate estimate.
+     * @notice Computes the wstETH a given syLST balance will receive at maturity,
+     *         converting the stETH-denominated claim to wstETH at the current rate.
      * @param seriesId     The series.
      * @param syLstAmount  Amount of syLST tokens.
-     * @return fixedClaim  Fixed-rate wstETH owed at maturity.
+     * @return fixedClaim  wstETH owed at maturity (stETH claim ÷ current rate).
      */
     function previewRedeem(bytes32 seriesId, uint256 syLstAmount)
         external
@@ -237,10 +243,10 @@ interface IStableYieldVault {
         returns (DepositRecord[] memory);
 
     /**
-     * @notice Get total claim at maturity for a user across all their deposits in a series.
+     * @notice Get total stETH claim at maturity for a user across all their deposits in a series.
      * @param seriesId Target series.
      * @param user     Depositor address.
-     * @return totalClaim Sum of claimAtMaturity across all deposit records.
+     * @return totalClaim Sum of claimAtMaturityStEth across all deposit records (in stETH).
      */
     function getUserClaim(bytes32 seriesId, address user)
         external

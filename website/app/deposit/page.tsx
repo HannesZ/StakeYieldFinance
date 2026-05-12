@@ -5,7 +5,7 @@ import { useAccount, useReadContract, useWriteContract, useWaitForTransactionRec
 import { parseEther, formatEther } from "viem";
 import { ConnectButton } from "@/components/ConnectButton";
 import { DEMO_SERIES } from "@/lib/utils";
-import { ADDRESSES, STABLE_YIELD_VAULT_ABI, ERC20_ABI } from "@/lib/contracts";
+import { ADDRESSES, STABLE_YIELD_VAULT_ABI, ERC20_ABI, WSTETH_ABI } from "@/lib/contracts";
 import { useSeries } from "@/hooks/useSeries";
 
 const addresses = ADDRESSES.hoodi;
@@ -20,12 +20,6 @@ export default function DepositPage() {
   const parsedAmount = parseFloat(amount) || 0;
   const tenor = (selectedSeries.maturity - Math.floor(Date.now() / 1000)) / (365 * 86400);
   const effectiveRate = seriesInfo.fixedRate;
-  const expectedPayout = parsedAmount * (1 + (effectiveRate / 100) * tenor);
-  const yieldAmount = expectedPayout - parsedAmount;
-  const maturityDate = new Date(selectedSeries.maturity * 1000).toLocaleDateString(
-    "en-US",
-    { year: "numeric", month: "long", day: "numeric" }
-  );
 
   // Read wstETH balance
   const { data: wstETHBalance } = useReadContract({
@@ -35,6 +29,26 @@ export default function DepositPage() {
     args: address ? [address] : undefined,
     query: { enabled: !!address },
   });
+
+  // Read stEthPerToken for conversion (RAY-scaled, 1e27)
+  const { data: stEthPerToken } = useReadContract({
+    address: addresses.wstETH,
+    abi: WSTETH_ABI,
+    functionName: "stEthPerToken",
+  });
+
+  // Compute stETH value and expected payout in stETH
+  const stEthPerTokenNum = stEthPerToken ? Number(stEthPerToken) / 1e27 : 1;
+  const stEthValue = parsedAmount * stEthPerTokenNum;
+  const expectedPayoutStEth = stEthValue * (1 + (effectiveRate / 100) * tenor);
+  const yieldAmountStEth = expectedPayoutStEth - stEthValue;
+  // Approximate wstETH equivalent at current rate (for user reference)
+  const expectedPayoutWstEth = stEthPerTokenNum > 0 ? expectedPayoutStEth / stEthPerTokenNum : 0;
+
+  const maturityDate = new Date(selectedSeries.maturity * 1000).toLocaleDateString(
+    "en-US",
+    { year: "numeric", month: "long", day: "numeric" }
+  );
 
   // Read current allowance
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
@@ -128,8 +142,8 @@ export default function DepositPage() {
       <div>
         <h1 className="text-3xl font-bold text-white">Deposit wstETH</h1>
         <p className="mt-2 text-slate-400">
-          Lock your wstETH for a fixed yield. Choose a maturity, enter an amount,
-          and confirm.
+          Lock your wstETH for a fixed yield on its stETH value. Choose a maturity,
+          enter an amount, and confirm.
         </p>
       </div>
 
@@ -239,18 +253,27 @@ export default function DepositPage() {
               <span className="text-slate-400">You Deposit</span>
               <span className="font-mono text-white">
                 {parsedAmount.toFixed(4)} wstETH
+                <span className="text-slate-500 ml-1">
+                  ≈ {stEthValue.toFixed(4)} stETH
+                </span>
               </span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-slate-400">Fixed Yield</span>
               <span className="font-mono text-[#4EC9B0]">
-                +{yieldAmount.toFixed(4)} wstETH
+                +{yieldAmountStEth.toFixed(4)} stETH
               </span>
             </div>
             <div className="flex justify-between text-base font-semibold">
               <span className="text-slate-200">You Receive at Maturity</span>
               <span className="font-mono text-white">
-                {expectedPayout.toFixed(4)} wstETH
+                {expectedPayoutStEth.toFixed(4)} stETH
+              </span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-500">≈ wstETH at current rate</span>
+              <span className="font-mono text-slate-500">
+                ≈ {expectedPayoutWstEth.toFixed(4)} wstETH
               </span>
             </div>
           </div>

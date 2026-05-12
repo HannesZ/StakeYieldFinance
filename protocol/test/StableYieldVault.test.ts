@@ -5,17 +5,24 @@ import { deploy, createSeries, advanceTime, simulateYield, fundReserve } from ".
 import type { DeployResult } from "./helpers/deploy";
 
 const WAD = ethers.parseEther("1"); // 1e18
+const RAY = 10n ** 27n;
 const SECONDS_PER_YEAR = 365n * 24n * 3600n;
+const INITIAL_RATE = 115n * 10n ** 25n; // 1.15e27 — MockWstETH starting rate
 
-// Helper: compute the expected claim at maturity given deposit + fixed rate + tenor
-function computeExpectedClaim(
-  principal: bigint,
+// Helper: compute the expected stETH claim at maturity
+function computeExpectedClaimStEth(
+  stEthValue: bigint,
   fixedRateE18: bigint,
   tenorSeconds: bigint
 ): bigint {
   const tenorFracE18 = (tenorSeconds * WAD) / SECONDS_PER_YEAR;
   const interestE18 = (fixedRateE18 * tenorFracE18) / WAD;
-  return principal + (principal * interestE18) / WAD;
+  return stEthValue + (stEthValue * interestE18) / WAD;
+}
+
+// Helper: convert wstETH to stETH at a given rate
+function wstEthToStEth(wstEthAmount: bigint, rate: bigint = INITIAL_RATE): bigint {
+  return (wstEthAmount * rate) / RAY;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -202,20 +209,22 @@ describe("StableYieldVault", () => {
       const receipt = await tx.wait();
 
       // Parse the Deposited event
-      let claimAtMaturity = 0n;
+      let claimAtMaturityStEth = 0n;
       for (const log of receipt?.logs ?? []) {
         try {
           const parsed = vault.interface.parseLog(log);
           if (parsed?.name === "Deposited") {
-            claimAtMaturity = parsed.args.claimAtMaturity;
+            claimAtMaturityStEth = parsed.args.claimAtMaturityStEth;
             break;
           }
         } catch {}
       }
 
-      // 2.5% over 1 year on 10 wstETH → claim ≈ 10.25 wstETH
-      const expectedClaim = ethers.parseEther("10.25");
-      expect(claimAtMaturity).to.be.closeTo(expectedClaim, ethers.parseEther("0.01"));
+      // stETH value of 10 wstETH at rate 1.15 = 11.5 stETH
+      // 2.5% over 1 year → claim ≈ 11.5 × 1.025 = 11.7875 stETH
+      const stEthValue = wstEthToStEth(depositAmount);
+      const expectedClaim = stEthValue + (stEthValue * ethers.parseEther("0.025")) / WAD;
+      expect(claimAtMaturityStEth).to.be.closeTo(expectedClaim, ethers.parseEther("0.02"));
     });
 
     it("applies dynamic spread — series total reflects spread transferred to reserve", async () => {
@@ -339,8 +348,9 @@ describe("StableYieldVault", () => {
       const records = await vault.getDeposits(seriesId, user1.address);
       expect(records).to.have.length(1);
       expect(records[0].wstEthAmount).to.equal(depositAmount);
+      expect(records[0].stEthValue).to.equal(wstEthToStEth(depositAmount));
       expect(records[0].fixedRateE18).to.be.gt(0n); // rate was set
-      expect(records[0].claimAtMaturity).to.be.gt(depositAmount);
+      expect(records[0].claimAtMaturityStEth).to.be.gt(records[0].stEthValue);
     });
 
     it("multiple deposits from same user tracked separately", async () => {
@@ -380,10 +390,12 @@ describe("StableYieldVault", () => {
       await vault.connect(user1).deposit(seriesId, amt2);
 
       const records = await vault.getDeposits(seriesId, user1.address);
-      const totalClaim = records.reduce((sum, r) => sum + r.claimAtMaturity, 0n);
+      const totalClaim = records.reduce((sum, r) => sum + r.claimAtMaturityStEth, 0n);
       const userClaim = await vault.getUserClaim(seriesId, user1.address);
       expect(userClaim).to.equal(totalClaim);
-      expect(userClaim).to.be.gt(amt1 + amt2); // includes fixed interest
+      // Claims are in stETH; should be > stETH value of deposits
+      const stEthDeposited = wstEthToStEth(amt1 + amt2);
+      expect(userClaim).to.be.gt(stEthDeposited);
     });
   });
 
@@ -686,13 +698,20 @@ describe("StableYieldVault", () => {
   // ────────────────────────────────────────────────────────────────────────────
   describe("previewRedeem", () => {
     it("returns theoretical claim for unsettled series", async () => {
-      const { vault, seriesId } = await loadFixture(vaultFixture);
+      const d = await loadFixture(vaultFixture);
+      const { vault, wstETH, user1, seriesId } = d;
 
-      const amount = ethers.parseEther("10");
-      const preview = await vault.previewRedeem(seriesId, amount);
+      // Need a deposit so totalSyLst > 0 for previewRedeem to compute claims
+      const depositAmount = ethers.parseEther("10");
+      await wstETH.mint(user1.address, depositAmount);
+      await wstETH.connect(user1).approve(await vault.getAddress(), depositAmount);
+      await vault.connect(user1).deposit(seriesId, depositAmount);
 
-      // Should be > deposit amount (includes fixed interest)
-      expect(preview).to.be.gt(amount);
+      const preview = await vault.previewRedeem(seriesId, depositAmount);
+
+      // With rate unchanged (1.15), stETH claim converted back to wstETH
+      // gives > depositAmount (includes fixed interest)
+      expect(preview).to.be.gt(depositAmount);
     });
 
     it("returns actual claim for settled series", async () => {

@@ -9,7 +9,7 @@ const addresses = ADDRESSES.hoodi;
 const DEPLOY_BLOCK = 0n; // TODO: set to actual deploy block to speed up queries
 
 const DEPOSITED_EVENT = parseAbiItem(
-  "event Deposited(bytes32 indexed seriesId, address indexed depositor, uint256 wstEthAmount, uint256 syLstMinted, uint256 claimAtMaturity)"
+  "event Deposited(bytes32 indexed seriesId, address indexed depositor, uint256 wstEthAmount, uint256 syLstMinted, uint256 claimAtMaturityStEth)"
 );
 const REDEEMED_EVENT = parseAbiItem(
   "event Redeemed(bytes32 indexed seriesId, address indexed redeemer, uint256 syLstBurned, uint256 wstEthReturned)"
@@ -26,8 +26,8 @@ export interface Activity {
   amount: number;
   /** syLST amount (human-readable) */
   syLstAmount: number;
-  /** For deposits: claim at maturity (human-readable) */
-  claimAtMaturity?: number;
+  /** For deposits: claim at maturity in stETH (human-readable) */
+  claimAtMaturityStEth?: number;
 }
 
 export function useActivityHistory(userAddress: `0x${string}` | undefined) {
@@ -93,7 +93,7 @@ export function useActivityHistory(userAddress: `0x${string}` | undefined) {
             timestamp: blockTimestamps.get(log.blockNumber!) ?? 0,
             amount: Number(formatEther(args.wstEthAmount ?? 0n)),
             syLstAmount: Number(formatEther(args.syLstMinted ?? 0n)),
-            claimAtMaturity: Number(formatEther(args.claimAtMaturity ?? 0n)),
+            claimAtMaturityStEth: Number(formatEther(args.claimAtMaturityStEth ?? 0n)),
           });
         }
 

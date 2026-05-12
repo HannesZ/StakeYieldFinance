@@ -247,8 +247,15 @@ describe("Stress Tests — Reserve Dynamics", function () {
             .setApprovalForAll(await f.vault.getAddress(), true);
           await f.vault.connect(depositor).redeem(f.seriesId, balance);
           const wstBalance = await f.wstETH.balanceOf(depositor.address);
-          // Should get back > 100 (principal + ~2.5% yield)
-          expect(wstBalance).to.be.gt(ethers.parseEther("100"));
+          // With stETH-denominated claims, users get fewer wstETH back when
+          // the rate has increased, but their stETH value grew.
+          // At ~3% staking for 1 year, wstETH out ≈ 99.5 (less than deposited 100).
+          expect(wstBalance).to.be.gt(ethers.parseEther("98"));
+          // Verify stETH value increased (the real return):
+          const currentRate = await f.wstETH.stEthPerToken();
+          const stEthValue = (wstBalance * currentRate) / (10n ** 27n);
+          const originalStEth = (ethers.parseEther("100") * (115n * 10n ** 25n)) / (10n ** 27n);
+          expect(stEthValue).to.be.gt(originalStEth);
         }
       }
     });
@@ -292,7 +299,8 @@ describe("Stress Tests — Reserve Dynamics", function () {
           .setApprovalForAll(await f.vault.getAddress(), true);
         await f.vault.connect(depositor).redeem(f.seriesId, balance);
         const wstBalance = await f.wstETH.balanceOf(depositor.address);
-        expect(wstBalance).to.be.gt(ethers.parseEther("100"));
+        // stETH-denominated: wstETH returned < 100 but stETH value > original
+        expect(wstBalance).to.be.gt(ethers.parseEther("98"));
         console.log(
           `  User redeemed: ${formatWstETH(wstBalance)} wstETH (deposited 100)`
         );
@@ -461,9 +469,13 @@ describe("Stress Tests — Reserve Dynamics", function () {
             .setApprovalForAll(vaultAddr, true);
           await d.vault.connect(depositor).redeem(s6m, balance);
           const wstBal = await d.wstETH.balanceOf(depositor.address);
-          expect(wstBal).to.be.gt(ethers.parseEther("50"));
+          // stETH-denominated: wstETH returned < 50 but stETH value > original
+          const currentRate = await d.wstETH.stEthPerToken();
+          const stEthValue = (wstBal * currentRate) / (10n ** 27n);
+          const originalStEth = (ethers.parseEther("50") * (115n * 10n ** 25n)) / (10n ** 27n);
+          expect(stEthValue).to.be.gt(originalStEth);
           console.log(
-            `  6M user redeemed: ${formatWstETH(wstBal)} wstETH`
+            `  6M user redeemed: ${formatWstETH(wstBal)} wstETH (stETH value: ${formatWstETH(stEthValue)})`
           );
         }
       }

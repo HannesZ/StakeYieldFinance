@@ -10,7 +10,7 @@ export interface SeriesInfo {
   fixedRate: number; // percentage, e.g. 2.5
   fixedRateE18: bigint;
   totalDeposited: bigint;
-  totalClaims: bigint;
+  totalClaimsStEth: bigint;
   totalSyLst: bigint;
   isOpen: boolean;
   isSettled: boolean;
@@ -44,7 +44,7 @@ export function useSeries(seriesId: `0x${string}` = SERIES_2026Q4_ID): SeriesInf
       fixedRate,
       fixedRateE18,
       totalDeposited: 0n,
-      totalClaims: 0n,
+      totalClaimsStEth: 0n,
       totalSyLst: 0n,
       isOpen: true,
       isSettled: false,
@@ -57,7 +57,7 @@ export function useSeries(seriesId: `0x${string}` = SERIES_2026Q4_ID): SeriesInf
     fixedRate,
     fixedRateE18,
     totalDeposited: seriesData.totalDeposited,
-    totalClaims: seriesData.totalClaims,
+    totalClaimsStEth: seriesData.totalClaimsStEth,
     totalSyLst: seriesData.totalSyLst,
     isOpen: seriesData.isOpen,
     isSettled: seriesData.isSettled,

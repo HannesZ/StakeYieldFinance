@@ -46,7 +46,7 @@ export const STABLE_YIELD_VAULT_ABI = [
       { name: "depositor", type: "address", indexed: true },
       { name: "wstEthAmount", type: "uint256", indexed: false },
       { name: "syLstMinted", type: "uint256", indexed: false },
-      { name: "claimAtMaturity", type: "uint256", indexed: false },
+      { name: "claimAtMaturityStEth", type: "uint256", indexed: false },
     ],
   },
   {
@@ -80,9 +80,10 @@ export const STABLE_YIELD_VAULT_ABI = [
         components: [
           { name: "maturity", type: "uint256" },
           { name: "totalDeposited", type: "uint256" },
-          { name: "totalClaims", type: "uint256" },
+          { name: "totalClaimsStEth", type: "uint256" },
           { name: "totalSyLst", type: "uint256" },
           { name: "weightedRateSum", type: "uint256" },
+          { name: "totalStEthDeposited", type: "uint256" },
           { name: "isOpen", type: "bool" },
           { name: "isSettled", type: "bool" },
         ],
@@ -154,9 +155,10 @@ export const STABLE_YIELD_VAULT_ABI = [
       type: "tuple[]",
       components: [
         { name: "wstEthAmount", type: "uint256" },
+        { name: "stEthValue", type: "uint256" },
         { name: "fixedRateE18", type: "uint256" },
         { name: "depositTimestamp", type: "uint256" },
-        { name: "claimAtMaturity", type: "uint256" },
+        { name: "claimAtMaturityStEth", type: "uint256" },
       ],
     }],
   },
@@ -168,7 +170,7 @@ export const STABLE_YIELD_VAULT_ABI = [
       { name: "seriesId", type: "bytes32" },
       { name: "user", type: "address" },
     ],
-    outputs: [{ name: "totalClaim", type: "uint256" }],
+    outputs: [{ name: "totalClaimStEth", type: "uint256" }],
   },
   // Write functions
   {
@@ -197,6 +199,13 @@ export const STABLE_YIELD_VAULT_ABI = [
     stateMutability: "nonpayable",
     inputs: [],
     outputs: [],
+  },
+  {
+    type: "function",
+    name: "totalStEthObligationBase",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
   },
 ] as const;
 
@@ -311,13 +320,6 @@ export const RESERVE_MANAGER_ABI = [
   },
   {
     type: "function",
-    name: "kappaEmergency",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint256" }],
-  },
-  {
-    type: "function",
     name: "isEmergency",
     stateMutability: "view",
     inputs: [],
@@ -382,7 +384,60 @@ export const SPREAD_CALCULATOR_ABI = [
   },
 ] as const;
 
-// ─── ERC-20 (wstETH) ABI subset ────────────────────────────────────────────
+// ─── wstETH ABI (ERC-20 + stEthPerToken) ────────────────────────────────────
+
+export const WSTETH_ABI = [
+  {
+    type: "function",
+    name: "stEthPerToken",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "allowance",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "decimals",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }],
+  },
+  {
+    type: "function",
+    name: "symbol",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
+] as const;
+
+// ─── ERC-20 (generic) ABI subset ────────────────────────────────────────────
 
 export const ERC20_ABI = [
   {
