@@ -1,66 +1,64 @@
-# Ignore folder for temporary files
+# ─── Environment & secrets ────────────────────────────────────────────────────
+.env
+protocol/.env
+
+# ─── Temporary / archive ─────────────────────────────────────────────────────
 archive/
 temp/
-
-cache/*
-!cache/.gitkeep
-
-# Ignore scratch files
+cache/
 scratch.*
 
-# Ignore specific files and folders
-Materials/
-modified_file.csv
-.env
+# ─── Generated / one-off artifacts ───────────────────────────────────────────
+*.pptx
+*.ods
+yield_curve_*.png
+query_json_test.json
+TESTNET_PLAN.md
+WEBSITE_PLAN.md
 
-# Ignore output files
+# ─── Data (large / regenerable) ──────────────────────────────────────────────
 beacon_chain_queues*.csv
 pending_deposits_slot_*.csv
 .~lock.*.csv#
-*.ods
+*.stdout
+*.log
+data/history.csv
+data/history_daily_backfill.csv
+data/history.xlsx
 
-# Node / Hardhat
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ─── Node / Hardhat ──────────────────────────────────────────────────────────
 node_modules/
-protocol/node_modules/
 protocol/artifacts/
 protocol/cache/
 protocol/typechain-types/
 package-lock.json
 protocol/package-lock.json
+website/package-lock.json
 
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# ─── Next.js ─────────────────────────────────────────────────────────────────
+website/.next/
 
-# Virtual environments
-.venv/
-env/
-venv/
-
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-
-# Logs
-*.log
-
-# Test/coverage
-.coverage
-htmlcov/
-.pytest_cache/
-
-# IDE/project settings
+# ─── IDE ─────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
-cache/deposit_metadata.cache.json
-*.stdout
-data/history.csv
-data/history_daily_backfill.csv
-data/history.xlsx
-.env
-protocol/.env
 
-# Study sessions (personal notes)
+# ─── Study sessions (personal notes) ─────────────────────────────────────────
 study-sessions/
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+Materials/
+modified_file.csv
