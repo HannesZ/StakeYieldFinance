@@ -178,14 +178,23 @@ export default function DashboardPage() {
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
           <div className="text-sm text-slate-400">Locked in StakeYield</div>
-          <div className="mt-1 text-2xl font-bold font-mono text-[#4EC9B0]">
-            {syLstBal !== undefined && syLstBal > 0
-              ? `≈ ${toEth(syLstBal).toFixed(d)} ETH`
-              : syLstBal !== undefined ? `0.${'0'.repeat(d)} ETH` : "—"}
-          </div>
-          <div className="mt-0.5 font-mono text-xs text-slate-500">
-            {syLstBal !== undefined ? `${syLstBal.toFixed(d)} syLST (2026Q4)` : ""}
-          </div>
+          {(() => {
+            const positionValue = ethDeposited + accruedInterest;
+            return (
+              <>
+                <div className="mt-1 text-2xl font-bold font-mono text-[#4EC9B0]">
+                  {syLstBal !== undefined && syLstBal > 0
+                    ? `≈ ${positionValue.toFixed(d)} ETH`
+                    : syLstBal !== undefined ? `0.${'0'.repeat(d)} ETH` : "—"}
+                </div>
+                <div className="mt-0.5 font-mono text-xs text-slate-500">
+                  {syLstBal !== undefined && syLstBal > 0
+                    ? `${ethDeposited.toFixed(d)} deposited + ${accruedInterest.toFixed(d)} accrued`
+                    : ""}
+                </div>
+              </>
+            );
+          })()}
         </div>
       </div>
 
