@@ -9,12 +9,15 @@ import { ADDRESSES, RESERVE_MANAGER_ABI, SPREAD_CALCULATOR_ABI, STABLE_YIELD_VAU
 import { DEMO_SERIES, SERIES_2026Q4_ID, timeUntil } from "@/lib/utils";
 import { useSeries } from "@/hooks/useSeries";
 import { useSpotAPR } from "@/hooks/useSpotAPR";
+import { usePrecision } from "@/hooks/usePrecision";
+import { PrecisionToggle } from "@/components/PrecisionToggle";
 
 const addresses = ADDRESSES.hoodi;
 
 export default function ProtocolPage() {
   const seriesInfo = useSeries();
   const { spotAPR, source: aprSource } = useSpotAPR();
+  const { decimals: d, extended, isTestnet, toggle } = usePrecision();
 
   // Reserve data
   const { data: totalReserve } = useReadContract({
@@ -95,31 +98,36 @@ export default function ProtocolPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold text-white">Protocol Health</h1>
-        <p className="mt-2 text-slate-400">
-          Real-time on-chain data from StableYield on Hoodi testnet.
-        </p>
-        {isEmergency && (
-          <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400">
-            ⚠️ Emergency mode active — solvency below critical threshold
-          </div>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-white">Protocol Health</h1>
+          <p className="mt-2 text-slate-400">
+            Real-time on-chain data from StableYield on Hoodi testnet.
+          </p>
+        </div>
+        {isTestnet && toggle && (
+          <PrecisionToggle extended={extended} onToggle={toggle} />
         )}
       </div>
+      {isEmergency && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400">
+          ⚠️ Emergency mode active — solvency below critical threshold
+        </div>
+      )}
 
       {/* Key Metrics */}
       <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
         <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
           <div className="text-xs text-slate-400 uppercase tracking-wider">Reserve</div>
           <div className="mt-2 text-2xl font-bold font-mono text-white">
-            {reserve !== null ? reserve.toFixed(4) : "—"}
+            {reserve !== null ? reserve.toFixed(d) : "—"}
           </div>
           <div className="text-xs text-slate-500">wstETH</div>
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
           <div className="text-xs text-slate-400 uppercase tracking-wider">Liabilities</div>
           <div className="mt-2 text-2xl font-bold font-mono text-white">
-            {liabilities !== null ? liabilities.toFixed(4) : "—"}
+            {liabilities !== null ? liabilities.toFixed(d) : "—"}
           </div>
           <div className="text-xs text-slate-500">wstETH owed</div>
         </div>

@@ -308,6 +308,34 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         whenNotPaused
         returns (uint256 syLstMinted)
     {
+        return _deposit(seriesId, wstEthAmount, msg.sender);
+    }
+
+    /**
+     * @inheritdoc IStableYieldVault
+     *
+     * @dev Same as deposit() but credits syLST and deposit records to `beneficiary`.
+     *      wstETH is still pulled from msg.sender (the router/zap contract).
+     */
+    function depositFor(bytes32 seriesId, uint256 wstEthAmount, address beneficiary)
+        external
+        override
+        nonReentrant
+        whenNotPaused
+        returns (uint256 syLstMinted)
+    {
+        require(beneficiary != address(0), "Vault: zero beneficiary");
+        return _deposit(seriesId, wstEthAmount, beneficiary);
+    }
+
+    /**
+     * @dev Internal deposit logic shared by deposit() and depositFor().
+     *      wstETH is pulled from msg.sender; syLST and records are credited to `beneficiary`.
+     */
+    function _deposit(bytes32 seriesId, uint256 wstEthAmount, address beneficiary)
+        internal
+        returns (uint256 syLstMinted)
+    {
         require(wstEthAmount > 0, "Vault: zero deposit");
 
         Series storage s = _series[seriesId];
@@ -325,7 +353,7 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             require(_kappa >= _kappaEmergency, "Vault: reserve below emergency threshold");
         }
 
-        // ── 1. Pull wstETH from depositor ──────────────────────────────────────
+        // ── 1. Pull wstETH from caller (msg.sender, may be router) ──────────────
         IERC20(wstETH).safeTransferFrom(msg.sender, address(this), wstEthAmount);
 
         // ── 2. Snapshot stETH/wstETH rate and compute stETH value ───────────────
@@ -354,8 +382,8 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
         // ── 7. Mint syLST 1:1 with deposited wstETH ────────────────────────────
         syLstMinted = wstEthAmount; // 1:1 mint
 
-        // ── 7b. Store per-deposit record ────────────────────────────────────────
-        _deposits[seriesId][msg.sender].push(DepositRecord({
+        // ── 7b. Store per-deposit record for beneficiary ────────────────────────
+        _deposits[seriesId][beneficiary].push(DepositRecord({
             wstEthAmount:          wstEthAmount,
             stEthValue:            stEthValue,
             fixedRateE18:          currentFixedRate,
@@ -384,10 +412,10 @@ contract StableYieldVault is IStableYieldVault, AccessControl, ReentrancyGuard, 
             IReserveManager(reserveManager).depositReserve(spreadIncomeWstEth);
         }
 
-        // ── 11. Mint syLST to depositor ─────────────────────────────────────────
-        ISyLST(syLST).mint(msg.sender, uint256(seriesId), syLstMinted, "");
+        // ── 11. Mint syLST to beneficiary ───────────────────────────────────────
+        ISyLST(syLST).mint(beneficiary, uint256(seriesId), syLstMinted, "");
 
-        emit Deposited(seriesId, msg.sender, wstEthAmount, syLstMinted, claimAtMaturityStEth);
+        emit Deposited(seriesId, beneficiary, wstEthAmount, syLstMinted, claimAtMaturityStEth);
     }
 
     /**

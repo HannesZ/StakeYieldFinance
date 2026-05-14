@@ -9,12 +9,13 @@
 
 export const ADDRESSES = {
   hoodi: {
-    stableYieldVault: "0x221C3D504c8fC1d539ede6a2eEde7DcdB7855356" as `0x${string}`,
-    syLST: "0xE5ca9C109495A098eAf883E7Ba414Bf54C2E1a2c" as `0x${string}`,
+    stableYieldVault: "0x18849aDE3838DA311bfD79e55F3bB0F4Ee470E01" as `0x${string}`,
+    syLST: "0xD787DD8Db0a1F40D2CAC9d2da138F26B4159C398" as `0x${string}`,
     reserveManager: "0xADf826DF9f5d260FA60202c6520f3ECB530a0a72" as `0x${string}`,
     spreadCalculator: "0x883Af902FeBEd81fD03F93d1B0aDA6A53e3DeF1a" as `0x${string}`,
     syldToken: "0xec9a36E563aE03D78851d5A44DE44D45e137413D" as `0x${string}`,
     wstETH: "0x7E99eE3C66636DE415D2d7C880938F2f40f94De4" as `0x${string}`,
+    zapRouter: "0x634c5EA80f4280c170234ab42C2506514A72D313" as `0x${string}`,
   },
   mainnet: {
     stableYieldVault: "0x0000000000000000000000000000000000000000" as `0x${string}`,
@@ -434,6 +435,68 @@ export const WSTETH_ABI = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "string" }],
+  },
+] as const;
+
+// ─── ZapRouter ABI ──────────────────────────────────────────────────────────
+
+export const ZAP_ROUTER_ABI = [
+  {
+    type: "function",
+    name: "depositETH",
+    stateMutability: "payable",
+    inputs: [
+      { name: "seriesId", type: "bytes32" },
+    ],
+    outputs: [{ name: "syLstMinted", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "stETH",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "wstETH",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "vault",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "event",
+    name: "ZapDeposit",
+    inputs: [
+      { name: "seriesId", type: "bytes32", indexed: true },
+      { name: "depositor", type: "address", indexed: true },
+      { name: "ethAmount", type: "uint256", indexed: false },
+      { name: "wstEthDeposited", type: "uint256", indexed: false },
+      { name: "syLstMinted", type: "uint256", indexed: false },
+    ],
+  },
+] as const;
+
+// ─── StableYieldVault depositFor ABI (append to main ABI where needed) ──────
+
+export const VAULT_DEPOSIT_FOR_ABI = [
+  {
+    type: "function",
+    name: "depositFor",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "seriesId", type: "bytes32" },
+      { name: "wstEthAmount", type: "uint256" },
+      { name: "beneficiary", type: "address" },
+    ],
+    outputs: [{ name: "syLstMinted", type: "uint256" }],
   },
 ] as const;
 

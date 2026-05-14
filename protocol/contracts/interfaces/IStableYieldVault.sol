@@ -165,6 +165,19 @@ interface IStableYieldVault {
     function deposit(bytes32 seriesId, uint256 wstEthAmount) external returns (uint256 syLstMinted);
 
     /**
+     * @notice Deposit wstETH into an open series on behalf of a beneficiary.
+     * @dev Identical to deposit() but syLST and deposit records are credited to `beneficiary`.
+     *      Intended for router/zap contracts that wrap ETH→wstETH before depositing.
+     *      The caller must approve this contract to spend `wstEthAmount` of wstETH.
+     *
+     * @param seriesId      Target series identifier.
+     * @param wstEthAmount  Amount of wstETH to deposit (must be > 0).
+     * @param beneficiary   Address that receives syLST and is credited with the deposit.
+     * @return syLstMinted  Amount of syLST minted to the beneficiary.
+     */
+    function depositFor(bytes32 seriesId, uint256 wstEthAmount, address beneficiary) external returns (uint256 syLstMinted);
+
+    /**
      * @notice Redeem syLST for wstETH after the series has matured and been settled.
      * @dev
      *  - Reverts if block.timestamp < series.maturity.
